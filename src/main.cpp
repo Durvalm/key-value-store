@@ -95,7 +95,21 @@ int main()
                 << "DELETE <key>\n"
                 << "SIZE\n"
                 << "HELP\n"
+                << "EXISTS <key>\n"
                 << "EXIT\n";
+        }
+        else if (command == "EXISTS")
+        {
+            std::string key;
+            input >> key;
+
+            if (key.empty())
+            {
+                std::cout << "Usage: EXISTS <key>\n";
+                continue;
+            }
+
+            std::cout << (cache.contains(key) ? "1" : "0") << '\n';
         }
         else if (command == "EXIT")
         {

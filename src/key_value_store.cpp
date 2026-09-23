@@ -29,3 +29,9 @@ KeyValueStore::size() const
 {
     return data_.size();
 }
+
+bool KeyValueStore::contains(
+    const std::string &key) const
+{
+    return data_.contains(key);
+}
