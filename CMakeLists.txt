@@ -28,6 +28,24 @@ target_link_libraries(kv_cli
         kv_store
 )
 
+include(CTest)
+
+if(BUILD_TESTING)
+    add_executable(kv_store_tests
+        tests/key_value_store_test.cpp
+    )
+
+    target_link_libraries(kv_store_tests
+        PRIVATE
+            kv_store
+    )
+
+    add_test(
+        NAME kv_store_tests
+        COMMAND kv_store_tests
+    )
+endif()
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(kv_store PRIVATE
         -Wall
@@ -40,4 +58,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         -Wextra
         -Wpedantic
     )
+
+    if(BUILD_TESTING)
+        target_compile_options(kv_store_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
 endif()
