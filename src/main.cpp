@@ -4,9 +4,10 @@
 #include <sstream>
 #include <string>
 
-int main()
+int main(int argc, char *argv[])
 {
-    KeyValueStore cache;
+    const std::string file_path = argc > 1 ? argv[1] : "kv_store.log";
+    KeyValueStore cache(file_path);
     std::string line;
 
     std::cout << "Key Value Store\n";

@@ -21,6 +21,8 @@ Implement a thread-unsafe local store with:
 
 ### 2. Persistence
 
+See [Persistence Requirements](docs/persistence-requirements.md) for the behavioral contract, recovery policy, tests, and implementation checkpoints.
+
 Preserve data across process restarts using:
 
 - An append-only log
