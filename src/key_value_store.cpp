@@ -5,7 +5,9 @@
 #include <stdexcept>
 #include <iomanip>
 #include <iostream>
+#include <filesystem>
 
+// Helper functions
 namespace
 {
     void validate_field(const std::string &field, const std::string &name)
@@ -35,12 +37,14 @@ namespace
     }
 }
 
+// Construtor
 KeyValueStore::KeyValueStore(const std::string &file_path)
     : file_path_(file_path)
 {
     replay();
 }
 
+// Class Methods
 void KeyValueStore::set(
     const std::string &key,
     const std::string &value)
@@ -117,6 +121,47 @@ bool KeyValueStore::contains(
     return data_.contains(key);
 }
 
+void KeyValueStore::compact()
+{
+    if (file_path_.empty())
+    {
+        return;
+    }
+
+    std::filesystem::path temporary_path = file_path_;
+    temporary_path += ".tmp";
+    std::ofstream tmp_file(temporary_path, std::ios::trunc);
+
+    if (!tmp_file.is_open())
+        throw std::runtime_error("Could not open compacted log");
+
+    for (const auto &[key, value] : data_)
+    {
+        tmp_file << "SET "
+                 << std::quoted(key)
+                 << ' '
+                 << std::quoted(value)
+                 << '\n';
+    }
+
+    if (!tmp_file)
+        throw std::runtime_error("Could not write compacted log");
+
+    tmp_file.flush();
+
+    if (!tmp_file)
+        throw std::runtime_error("Could not flush compacted log");
+
+    tmp_file.close();
+    if (!tmp_file)
+    {
+        throw std::runtime_error("Could not close compacted log");
+    }
+
+    std::filesystem::rename(temporary_path, file_path_);
+}
+
+// Replay method, runs at startup and sends all data in-memory
 void KeyValueStore::replay()
 {
     std::ifstream log_file(file_path_);

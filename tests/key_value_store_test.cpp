@@ -40,6 +40,21 @@ namespace
         return contents.str();
     }
 
+    std::size_t count_records(const std::string &contents)
+    {
+        std::size_t record_count = 0;
+
+        for (char character : contents)
+        {
+            if (character == '\n')
+            {
+                ++record_count;
+            }
+        }
+
+        return record_count;
+    }
+
     void expect_runtime_error(
         const std::function<void()> &operation,
         const std::string &message)
@@ -222,6 +237,75 @@ namespace
 
         fs::remove(file_path);
     }
+
+    void test_compaction_preserves_state_and_removes_history()
+    {
+        namespace fs = std::filesystem;
+        const fs::path file_path = test_file("compaction_test");
+        fs::path temporary_path = file_path;
+        temporary_path += ".tmp";
+        fs::remove(file_path);
+        fs::remove(temporary_path);
+
+        {
+            KeyValueStore store(file_path.string());
+            store.set("language", "Python");
+            store.set("language", "Java");
+            store.set("language", "C++");
+            store.set("temporary", "value");
+            store.remove("temporary");
+            store.set("full name", "Durval Almeida");
+
+            expect(
+                count_records(read_file(file_path)) == 6,
+                "the append-only log contains historical mutations before compaction");
+
+            store.compact();
+
+            const std::string compacted_log = read_file(file_path);
+            expect(
+                count_records(compacted_log) == 2,
+                "compaction writes one SET record per live key");
+            expect(
+                compacted_log.find("DELETE") == std::string::npos,
+                "a compacted log contains no DELETE records");
+            expect(
+                !fs::exists(temporary_path),
+                "the temporary file is renamed away after successful compaction");
+        }
+
+        {
+            KeyValueStore recovered(file_path.string());
+            expect(recovered.size() == 2, "compacted state survives a restart");
+            expect(
+                recovered.get("language").value_or("") == "C++",
+                "compaction keeps the newest value");
+            expect(
+                recovered.get("full name").value_or("") == "Durval Almeida",
+                "compaction keeps independent live keys");
+            expect(!recovered.contains("temporary"), "compaction keeps deleted keys absent");
+
+            recovered.compact();
+            expect(
+                count_records(read_file(file_path)) == 2,
+                "compacting an already compacted log preserves its record count");
+        }
+
+        fs::remove(file_path);
+        fs::remove(temporary_path);
+    }
+
+    void test_in_memory_compaction_is_a_no_op()
+    {
+        KeyValueStore store;
+        store.set("name", "Durval");
+
+        store.compact();
+
+        expect(
+            store.get("name").value_or("") == "Durval",
+            "in-memory compaction leaves the store unchanged");
+    }
 } // namespace
 
 void test_contains()
@@ -252,6 +336,8 @@ int main()
     test_open_without_mutation_leaves_log_unchanged();
     test_invalid_complete_records_fail_recovery();
     test_incomplete_final_record_is_ignored();
+    test_compaction_preserves_state_and_removes_history();
+    test_in_memory_compaction_is_a_no_op();
 
     if (failures != 0)
     {

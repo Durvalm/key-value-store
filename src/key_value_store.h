@@ -16,6 +16,7 @@ public:
     bool remove(const std::string &key);
     std::size_t size() const;
     bool contains(const std::string &key) const;
+    void compact();
 
 private:
     void replay();

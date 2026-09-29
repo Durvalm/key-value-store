@@ -97,6 +97,7 @@ int main(int argc, char *argv[])
                 << "SIZE\n"
                 << "HELP\n"
                 << "EXISTS <key>\n"
+                << "COMPACT\n"
                 << "EXIT\n";
         }
         else if (command == "EXISTS")
@@ -115,6 +116,11 @@ int main(int argc, char *argv[])
         else if (command == "EXIT")
         {
             break;
+        }
+        else if (command == "COMPACT")
+        {
+            cache.compact();
+            std::cout << "OK\n";
         }
         else
         {
