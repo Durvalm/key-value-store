@@ -306,6 +306,34 @@ namespace
             store.get("name").value_or("") == "Durval",
             "in-memory compaction leaves the store unchanged");
     }
+
+    void test_mutations_append_after_compaction()
+    {
+        namespace fs = std::filesystem;
+        const fs::path file_path = test_file("post_compaction_append_test");
+        fs::remove(file_path);
+
+        {
+            KeyValueStore store(file_path.string());
+            store.set("language", "Python");
+            store.set("language", "C++");
+            store.compact();
+            store.set("project", "key-value store");
+        }
+
+        {
+            KeyValueStore recovered(file_path.string());
+            expect(recovered.size() == 2, "post-compaction append survives restart");
+            expect(
+                recovered.get("language").value_or("") == "C++",
+                "compacted data remains after a later append");
+            expect(
+                recovered.get("project").value_or("") == "key-value store",
+                "a later append is written to the compacted log");
+        }
+
+        fs::remove(file_path);
+    }
 } // namespace
 
 void test_contains()
@@ -338,6 +366,7 @@ int main()
     test_incomplete_final_record_is_ignored();
     test_compaction_preserves_state_and_removes_history();
     test_in_memory_compaction_is_a_no_op();
+    test_mutations_append_after_compaction();
 
     if (failures != 0)
     {
