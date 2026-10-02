@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(kv_store
     src/key_value_store.cpp
+    src/command_processor.cpp
 )
 
 target_include_directories(kv_store

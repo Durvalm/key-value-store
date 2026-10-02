@@ -34,6 +34,8 @@ Preserve data across process restarts using:
 
 ### 3. Database Server
 
+See [Database Server Requirements](docs/database-server-requirements.md) for the protocol contract, connection behavior, tests, and discovery-oriented checkpoints.
+
 Expose the store over a network through:
 
 - A TCP server and client
