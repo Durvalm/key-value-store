@@ -24,10 +24,20 @@ add_executable(kv_cli
     src/main.cpp
 )
 
+add_executable(kv_server
+    src/server_main.cpp
+)
+
 target_link_libraries(kv_cli
     PRIVATE
         kv_store
 )
+
+target_link_libraries(kv_server
+    PRIVATE
+        kv_store
+)
+
 
 include(CTest)
 
@@ -55,6 +65,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     )
 
     target_compile_options(kv_cli PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+
+    target_compile_options(kv_server PRIVATE
         -Wall
         -Wextra
         -Wpedantic
