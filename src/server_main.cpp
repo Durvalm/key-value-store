@@ -1,12 +1,13 @@
 #include <arpa/inet.h>
-#include <cstdlib>
-#include <iostream>
 #include <netinet/in.h>
-#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <cstdint> // std::uint16_t
-#include <cstdio>  // perror
+
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <string>
 
 int main()
 {
@@ -60,7 +61,6 @@ int main()
 
     while (true)
     {
-
         const int client_socket = ::accept(socket_server, nullptr, nullptr);
 
         if (client_socket == -1)
@@ -69,41 +69,58 @@ int main()
             break;
         }
 
-        char buffer[1024];
-        const ssize_t bytes_received =
-            ::recv(client_socket, buffer, sizeof(buffer), 0);
+        std::string pending_data;
+        bool client_connected = true;
 
-        if (bytes_received == -1)
+        while (client_connected)
         {
-            perror("recv");
-            ::close(client_socket);
-            continue;
-        }
+            char buffer[1024];
+            const ssize_t bytes_received =
+                ::recv(client_socket, buffer, sizeof(buffer), 0);
 
-        if (bytes_received == 0)
-        {
-            std::cout << "Client disconnected without sending data.\n";
-            ::close(client_socket);
-            continue;
-        }
+            if (bytes_received == -1)
+            {
+                std::perror("recv");
+                break;
+            }
 
-        const std::string request(
-            buffer,
-            static_cast<std::size_t>(bytes_received));
+            if (bytes_received == 0)
+            {
+                std::cout << "Client disconnected.\n";
+                break;
+            }
 
-        const std::string response =
-            request == "PING\n" ? "PONG\n" : "ERROR\n";
+            pending_data.append(
+                buffer,
+                static_cast<std::size_t>(bytes_received));
 
-        const ssize_t bytes_sent =
-            ::send(client_socket, response.data(), response.size(), 0);
+            std::size_t newline_position;
 
-        if (bytes_sent == -1)
-        {
-            perror("send");
+            while ((newline_position = pending_data.find('\n')) != std::string::npos)
+            {
+                const std::string request =
+                    pending_data.substr(0, newline_position + 1);
+
+                pending_data.erase(0, newline_position + 1);
+
+                const std::string response =
+                    request == "PING\n" ? "PONG\n" : "ERROR\n";
+
+                const ssize_t bytes_sent =
+                    ::send(client_socket, response.data(), response.size(), 0);
+
+                if (bytes_sent == -1)
+                {
+                    std::perror("send");
+                    client_connected = false;
+                    break;
+                }
+            }
         }
 
         ::close(client_socket);
     }
+
     ::close(socket_server);
 
     return EXIT_SUCCESS;
