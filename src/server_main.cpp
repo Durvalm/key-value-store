@@ -1,3 +1,6 @@
+#include "command_processor.h"
+#include "key_value_store.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -9,9 +12,14 @@
 #include <iostream>
 #include <string>
 
-int main()
+int main(int argc, char *argv[])
 {
     constexpr std::uint16_t server_port = 6380;
+
+    const std::string file_path =
+        argc > 1 ? argv[1] : "kv_server.log";
+
+    KeyValueStore store(file_path);
 
     const int socket_server = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
@@ -98,16 +106,18 @@ int main()
 
             while ((newline_position = pending_data.find('\n')) != std::string::npos)
             {
+                // process_command expects the request without its framing newline.
                 const std::string request =
-                    pending_data.substr(0, newline_position + 1);
+                    pending_data.substr(0, newline_position);
 
+                // Remove the request and its newline from pending_data.
                 pending_data.erase(0, newline_position + 1);
 
-                const std::string response =
-                    request == "PING\n" ? "PONG\n" : "ERROR\n";
+                const CommandResult result =
+                    process_command(request, store);
 
                 const ssize_t bytes_sent =
-                    ::send(client_socket, response.data(), response.size(), 0);
+                    ::send(client_socket, result.response.data(), result.response.size(), 0);
 
                 if (bytes_sent == -1)
                 {
