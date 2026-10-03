@@ -58,54 +58,52 @@ int main()
 
     std::cout << "Listening on 127.0.0.1:" << server_port << '\n';
 
-    const int client_socket = ::accept(socket_server, nullptr, nullptr);
-
-    if (client_socket == -1)
+    while (true)
     {
-        perror("accept");
-        ::close(socket_server);
-        return EXIT_FAILURE;
-    }
 
-    char buffer[1024];
-    const ssize_t bytes_received =
-        ::recv(client_socket, buffer, sizeof(buffer), 0);
+        const int client_socket = ::accept(socket_server, nullptr, nullptr);
 
-    if (bytes_received == -1)
-    {
-        perror("recv");
+        if (client_socket == -1)
+        {
+            perror("accept");
+            break;
+        }
+
+        char buffer[1024];
+        const ssize_t bytes_received =
+            ::recv(client_socket, buffer, sizeof(buffer), 0);
+
+        if (bytes_received == -1)
+        {
+            perror("recv");
+            ::close(client_socket);
+            continue;
+        }
+
+        if (bytes_received == 0)
+        {
+            std::cout << "Client disconnected without sending data.\n";
+            ::close(client_socket);
+            continue;
+        }
+
+        const std::string request(
+            buffer,
+            static_cast<std::size_t>(bytes_received));
+
+        const std::string response =
+            request == "PING\n" ? "PONG\n" : "ERROR\n";
+
+        const ssize_t bytes_sent =
+            ::send(client_socket, response.data(), response.size(), 0);
+
+        if (bytes_sent == -1)
+        {
+            perror("send");
+        }
+
         ::close(client_socket);
-        ::close(socket_server);
-        return EXIT_FAILURE;
     }
-
-    if (bytes_received == 0)
-    {
-        std::cout << "Client disconnected without sending data.\n";
-        ::close(client_socket);
-        ::close(socket_server);
-        return EXIT_SUCCESS;
-    }
-
-    const std::string request(
-        buffer,
-        static_cast<std::size_t>(bytes_received));
-
-    const std::string response =
-        request == "PING\n" ? "PONG\n" : "ERROR\n";
-
-    const ssize_t bytes_sent =
-        ::send(client_socket, response.data(), response.size(), 0);
-
-    if (bytes_sent == -1)
-    {
-        perror("send");
-        ::close(client_socket);
-        ::close(socket_server);
-        return EXIT_FAILURE;
-    }
-
-    ::close(client_socket);
     ::close(socket_server);
 
     return EXIT_SUCCESS;
