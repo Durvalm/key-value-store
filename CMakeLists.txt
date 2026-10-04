@@ -42,6 +42,8 @@ target_link_libraries(kv_server
 include(CTest)
 
 if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
     add_executable(kv_store_tests
         tests/key_value_store_test.cpp
     )
@@ -54,6 +56,18 @@ if(BUILD_TESTING)
     add_test(
         NAME kv_store_tests
         COMMAND kv_store_tests
+    )
+
+    add_test(
+        NAME kv_server_integration_tests
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/kv_server_integration_test.py
+            $<TARGET_FILE:kv_server>
+    )
+
+    set_tests_properties(kv_server_integration_tests PROPERTIES
+        TIMEOUT 15
     )
 endif()
 

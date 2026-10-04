@@ -2,4 +2,4 @@
 
 /build/
 .DS_Store
-/kv_store.log
+/*.log
