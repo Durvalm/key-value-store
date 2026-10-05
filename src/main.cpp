@@ -1,7 +1,6 @@
 #include "key_value_store.h"
-
+#include "command_processor.h"
 #include <iostream>
-#include <sstream>
 #include <string>
 
 int main(int argc, char *argv[])
@@ -21,110 +20,11 @@ int main(int argc, char *argv[])
             // Input ended, such as when the user presses Ctrl+D.
             break;
         }
-
-        std::istringstream input(line);
-        std::string command;
-
-        input >> command;
-
-        if (command.empty())
-        {
-            continue;
-        }
-
-        if (command == "SET")
-        {
-            std::string key;
-            std::string value;
-
-            input >> key;
-            std::getline(input >> std::ws, value);
-
-            if (key.empty() || value.empty())
-            {
-                std::cout << "Usage: Set <key> <value>\n";
-                continue;
-            }
-            cache.set(key, value);
-            std::cout << "OK\n";
-        }
-        else if (command == "GET")
-        {
-            std::string key;
-            input >> key;
-
-            if (key.empty())
-            {
-                std::cout << "Usage: GET <key>\n";
-                continue;
-            }
-
-            std::optional<std::string> value = cache.get(key);
-
-            if (value.has_value())
-            {
-                std::cout << value.value() << '\n';
-            }
-            else
-            {
-                std::cout << "(nil)\n";
-            }
-        }
-        else if (command == "DELETE")
-        {
-            std::string key;
-            input >> key;
-
-            if (key.empty())
-            {
-                std::cout << "Usage: DELETE <key>\n";
-                continue;
-            }
-
-            bool removed = cache.remove(key);
-            std::cout << (removed ? "1" : "0") << '\n';
-        }
-        else if (command == "SIZE")
-        {
-            std::cout << cache.size() << '\n';
-        }
-        else if (command == "HELP")
-        {
-            std::cout
-                << "SET <key> <value>\n"
-                << "GET <key>\n"
-                << "DELETE <key>\n"
-                << "SIZE\n"
-                << "HELP\n"
-                << "EXISTS <key>\n"
-                << "COMPACT\n"
-                << "EXIT\n";
-        }
-        else if (command == "EXISTS")
-        {
-            std::string key;
-            input >> key;
-
-            if (key.empty())
-            {
-                std::cout << "Usage: EXISTS <key>\n";
-                continue;
-            }
-
-            std::cout << (cache.contains(key) ? "1" : "0") << '\n';
-        }
-        else if (command == "EXIT")
+        CommandResult result = process_command(line, cache);
+        std::cout << result.response;
+        if (result.close_requested)
         {
             break;
-        }
-        else if (command == "COMPACT")
-        {
-            cache.compact();
-            std::cout << "OK\n";
-        }
-        else
-        {
-            std::cout << "Unknown command. Type HELP.\n";
         }
     }
 

@@ -1,3 +1,4 @@
+#include "command_processor.h"
 #include "key_value_store.h"
 
 #include <cstdlib>
@@ -334,6 +335,74 @@ namespace
 
         fs::remove(file_path);
     }
+
+    void test_command_processor_mutations_and_queries()
+    {
+        KeyValueStore store;
+
+        const CommandResult set_result = process_command(
+            "SET \"full name\" \"Durval \\\"D\\\" Almeida\"",
+            store);
+        expect(set_result.response == "OK\n", "SET returns the protocol success response");
+        expect(!set_result.close_requested, "SET keeps the connection open");
+
+        const CommandResult get_result = process_command("GET \"full name\"", store);
+        expect(
+            get_result.response == "VALUE \"Durval \\\"D\\\" Almeida\"\n",
+            "GET returns an escaped typed value response");
+
+        expect(
+            process_command("EXISTS \"full name\"", store).response == "INTEGER 1\n",
+            "EXISTS returns a typed integer response");
+        expect(
+            process_command("SIZE", store).response == "INTEGER 1\n",
+            "SIZE returns a typed integer response");
+        expect(
+            process_command("DELETE \"full name\"", store).response == "INTEGER 1\n",
+            "DELETE reports a removed key");
+        expect(
+            process_command("GET \"full name\"", store).response == "NOT_FOUND\n",
+            "GET distinguishes a missing key from a stored value");
+    }
+
+    void test_command_processor_rejects_malformed_requests()
+    {
+        KeyValueStore store;
+
+        expect(
+            process_command("", store).response.rfind("ERROR EMPTY_REQUEST", 0) == 0,
+            "an empty request returns a protocol error");
+        expect(
+            process_command("SET name value", store).response.rfind("ERROR INVALID_ARGUMENT", 0) == 0,
+            "unquoted SET fields are rejected");
+        expect(
+            process_command("GET \"name\" extra", store).response.rfind("ERROR INVALID_ARGUMENT", 0) == 0,
+            "extra command arguments are rejected");
+        expect(
+            process_command("UNKNOWN", store).response.rfind("ERROR UNKNOWN_COMMAND", 0) == 0,
+            "an unknown command returns a typed error");
+        expect(store.size() == 0, "malformed requests do not mutate the store");
+
+        const std::string oversized_request(4097, 'x');
+        expect(
+            process_command(oversized_request, store).response.rfind("ERROR REQUEST_TOO_LARGE", 0) == 0,
+            "requests over the protocol limit are rejected");
+    }
+
+    void test_command_processor_connection_result()
+    {
+        KeyValueStore store;
+
+        const CommandResult exit_result = process_command("EXIT", store);
+        expect(exit_result.response == "BYE\n", "EXIT returns the protocol goodbye response");
+        expect(exit_result.close_requested, "EXIT requests that the caller close its connection");
+
+        const CommandResult help_result = process_command("HELP", store);
+        expect(
+            help_result.response.rfind("COMMANDS ", 0) == 0,
+            "HELP returns one framed protocol response");
+        expect(!help_result.close_requested, "HELP keeps the connection open");
+    }
 } // namespace
 
 void test_contains()
@@ -367,6 +436,9 @@ int main()
     test_compaction_preserves_state_and_removes_history();
     test_in_memory_compaction_is_a_no_op();
     test_mutations_append_after_compaction();
+    test_command_processor_mutations_and_queries();
+    test_command_processor_rejects_malformed_requests();
+    test_command_processor_connection_result();
 
     if (failures != 0)
     {
