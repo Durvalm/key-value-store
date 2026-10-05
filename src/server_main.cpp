@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -40,6 +41,40 @@ namespace
         {
             return false;
         }
+    }
+
+    bool send_all(int socket, const std::string &data)
+    {
+        std::size_t total_sent = 0;
+
+        while (total_sent < data.size())
+        {
+            const ssize_t bytes_sent = ::send(
+                socket,
+                data.data() + total_sent,
+                data.size() - total_sent,
+                0);
+
+            if (bytes_sent == -1)
+            {
+                if (errno == EINTR)
+                {
+                    continue;
+                }
+
+                std::perror("send");
+                return false;
+            }
+
+            if (bytes_sent == 0)
+            {
+                return false;
+            }
+
+            total_sent += static_cast<std::size_t>(bytes_sent);
+        }
+
+        return true;
     }
 
     int run_server(const std::string &file_path, std::uint16_t port)
@@ -145,12 +180,8 @@ namespace
                     const CommandResult result =
                         process_command(request, store);
 
-                    const ssize_t bytes_sent =
-                        ::send(client_socket, result.response.data(), result.response.size(), 0);
-
-                    if (bytes_sent == -1)
+                    if (!send_all(client_socket, result.response))
                     {
-                        std::perror("send");
                         client_connected = false;
                         break;
                     }
