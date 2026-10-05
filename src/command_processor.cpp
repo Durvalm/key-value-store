@@ -8,8 +8,6 @@
 
 namespace
 {
-    constexpr std::size_t max_request_size = 4096;
-
     bool read_quoted(std::istringstream &input, std::string &result)
     {
         input >> std::ws;
@@ -43,11 +41,16 @@ namespace
     }
 } // namespace
 
+CommandResult request_too_large_result()
+{
+    return error_result("REQUEST_TOO_LARGE", "Request exceeds 4096 bytes");
+}
+
 CommandResult process_command(const std::string &line, KeyValueStore &cache)
 {
     if (line.size() > max_request_size)
     {
-        return error_result("REQUEST_TOO_LARGE", "Request exceeds 4096 bytes");
+        return request_too_large_result();
     }
 
     if (line.find_first_of("\r\n") != std::string::npos)

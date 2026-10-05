@@ -68,6 +68,7 @@ if(BUILD_TESTING)
             ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/kv_server_integration_test.py
             $<TARGET_FILE:kv_server>
+            $<TARGET_FILE:kv_client>
     )
 
     set_tests_properties(kv_server_integration_tests PROPERTIES
