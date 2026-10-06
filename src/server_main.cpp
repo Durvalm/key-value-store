@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -15,6 +16,8 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace
 {
@@ -116,11 +119,6 @@ namespace
             {
                 if (errno == EINTR)
                 {
-                    if (shutdown_requested)
-                    {
-                        return false;
-                    }
-
                     continue;
                 }
 
@@ -159,7 +157,7 @@ namespace
         std::string pending_data;
         bool client_connected = true;
 
-        while (client_connected && !shutdown_requested)
+        while (client_connected)
         {
             char buffer[1024];
             const ssize_t bytes_received =
@@ -169,11 +167,6 @@ namespace
             {
                 if (errno == EINTR)
                 {
-                    if (shutdown_requested)
-                    {
-                        break;
-                    }
-
                     continue;
                 }
 
@@ -290,7 +283,10 @@ namespace
 
         std::cout << "Listening on 127.0.0.1:" << port << '\n';
 
-        while (!shutdown_requested)
+        std::vector<std::thread> workers;
+        int exit_status = EXIT_SUCCESS;
+
+        while (workers.size() < 2 && !shutdown_requested)
         {
             const int client_socket = ::accept(socket_server, nullptr, nullptr);
 
@@ -307,18 +303,75 @@ namespace
                 }
 
                 std::perror("accept");
-                ::close(socket_server);
-                return EXIT_FAILURE;
+                exit_status = EXIT_FAILURE;
+                break;
             }
 
-            handle_client(client_socket, store, idle_timeout_seconds);
+            auto task = [client_socket, &store, idle_timeout_seconds]()
+            {
+                try
+                {
+                    handle_client(client_socket, store, idle_timeout_seconds);
+                }
+                catch (const std::exception &error)
+                {
+                    std::cerr << "Client handler failed: " << error.what() << '\n';
+                }
+                catch (...)
+                {
+                    std::cerr << "Client handler failed with an unknown exception.\n";
+                }
+                ::close(client_socket);
+            };
 
-            ::close(client_socket);
+            // Workers inherit this mask, leaving shutdown signals for main.
+            sigset_t shutdown_signals;
+            sigset_t previous_mask;
+            sigemptyset(&shutdown_signals);
+            sigaddset(&shutdown_signals, SIGINT);
+            sigaddset(&shutdown_signals, SIGTERM);
+            const int mask_error = ::pthread_sigmask(
+                SIG_BLOCK, &shutdown_signals, &previous_mask);
+            if (mask_error != 0)
+            {
+                std::cerr << "Could not block shutdown signals: " << mask_error << '\n';
+                ::close(client_socket);
+                exit_status = EXIT_FAILURE;
+                break;
+            }
+
+            try
+            {
+                workers.emplace_back(task);
+            }
+            catch (...)
+            {
+                ::close(client_socket);
+                std::cerr << "Could not start client worker.\n";
+                exit_status = EXIT_FAILURE;
+            }
+
+            const int restore_error = ::pthread_sigmask(
+                SIG_SETMASK, &previous_mask, nullptr);
+            if (restore_error != 0)
+            {
+                std::cerr << "Could not restore shutdown signals: " << restore_error << '\n';
+                exit_status = EXIT_FAILURE;
+            }
+            if (exit_status != EXIT_SUCCESS)
+            {
+                break;
+            }
         }
 
         ::close(socket_server);
+        for (std::thread &worker : workers)
+        {
+            worker.join();
+        }
+
         std::cout << "Server shut down.\n";
-        return EXIT_SUCCESS;
+        return exit_status;
     }
 } // namespace
 
