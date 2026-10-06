@@ -13,17 +13,23 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstddef>
 #include <exception>
 #include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
 
 namespace
 {
     constexpr std::uint16_t server_port = 6380;
-    constexpr unsigned int default_idle_timeout_seconds = 30;
+    constexpr unsigned int default_idle_timeout_seconds = 120;
     constexpr unsigned int max_idle_timeout_seconds = 3600;
+    constexpr std::size_t max_threads = 2;
+    constexpr std::size_t max_pending_connections = 16;
 
     volatile std::sig_atomic_t shutdown_requested = 0;
 
@@ -286,7 +292,100 @@ namespace
         std::vector<std::thread> workers;
         int exit_status = EXIT_SUCCESS;
 
-        while (workers.size() < 2 && !shutdown_requested)
+        std::queue<int> pending_connections;
+        std::mutex queue_mutex;
+        std::condition_variable work_available;
+        bool stopping = false;
+
+        // Start the threads array with lambda functions (we dont have the connections/client_id yet)
+        auto worker_task = [&pending_connections, &queue_mutex, &work_available, &stopping, &store, idle_timeout_seconds]()
+        {
+            while (true)
+            {
+                int client_socket;
+                {
+                    std::unique_lock<std::mutex> lock(queue_mutex);
+
+                    work_available.wait(lock, [&]()
+                                        { return stopping || !pending_connections.empty(); });
+                    if (stopping)
+                    {
+                        return;
+                    }
+                    client_socket = pending_connections.front();
+                    pending_connections.pop();
+                }
+                try
+                {
+                    handle_client(client_socket, store, idle_timeout_seconds);
+                }
+                catch (const std::exception &error)
+                {
+                    std::cerr << "Client handler failed: " << error.what() << "\n";
+                }
+                catch (...)
+                {
+                    std::cerr << "Client handler failed.\n";
+                }
+                ::close(client_socket);
+            }
+        };
+
+        // Workers inherit this mask, leaving shutdown signals for main.
+        sigset_t shutdown_signals;
+        sigset_t previous_mask;
+        sigemptyset(&shutdown_signals);
+        sigaddset(&shutdown_signals, SIGINT);
+        sigaddset(&shutdown_signals, SIGTERM);
+        const int mask_error = ::pthread_sigmask(
+            SIG_BLOCK, &shutdown_signals, &previous_mask);
+        if (mask_error != 0)
+        {
+            std::cerr << "Could not block shutdown signals: " << mask_error << '\n';
+            ::close(socket_server);
+            return EXIT_FAILURE;
+        }
+        try
+        {
+            for (std::size_t i = 0; i < max_threads; ++i)
+            {
+                workers.emplace_back(worker_task);
+            }
+        }
+        catch (...)
+        {
+            std::cerr << "Could not create all worker threads.\n";
+            exit_status = EXIT_FAILURE;
+        }
+
+        // Restore main's mask even if creating a worker failed.
+        const int restore_error = ::pthread_sigmask(
+            SIG_SETMASK, &previous_mask, nullptr);
+
+        if (restore_error != 0)
+        {
+            std::cerr << "Could not restore shutdown signals: " << restore_error << '\n';
+            exit_status = EXIT_FAILURE;
+        }
+
+        if (exit_status != EXIT_SUCCESS)
+        {
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex);
+                stopping = true;
+            }
+            work_available.notify_all();
+
+            for (std::thread &worker : workers)
+            {
+                worker.join();
+            }
+
+            ::close(socket_server);
+            return EXIT_FAILURE;
+        }
+
+        while (!shutdown_requested)
         {
             const int client_socket = ::accept(socket_server, nullptr, nullptr);
 
@@ -307,64 +406,49 @@ namespace
                 break;
             }
 
-            auto task = [client_socket, &store, idle_timeout_seconds]()
-            {
-                try
-                {
-                    handle_client(client_socket, store, idle_timeout_seconds);
-                }
-                catch (const std::exception &error)
-                {
-                    std::cerr << "Client handler failed: " << error.what() << '\n';
-                }
-                catch (...)
-                {
-                    std::cerr << "Client handler failed with an unknown exception.\n";
-                }
-                ::close(client_socket);
-            };
-
-            // Workers inherit this mask, leaving shutdown signals for main.
-            sigset_t shutdown_signals;
-            sigset_t previous_mask;
-            sigemptyset(&shutdown_signals);
-            sigaddset(&shutdown_signals, SIGINT);
-            sigaddset(&shutdown_signals, SIGTERM);
-            const int mask_error = ::pthread_sigmask(
-                SIG_BLOCK, &shutdown_signals, &previous_mask);
-            if (mask_error != 0)
-            {
-                std::cerr << "Could not block shutdown signals: " << mask_error << '\n';
-                ::close(client_socket);
-                exit_status = EXIT_FAILURE;
-                break;
-            }
-
             try
             {
-                workers.emplace_back(task);
+                bool queued = false;
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex);
+                    if (pending_connections.size() < max_pending_connections)
+                    {
+                        pending_connections.emplace(client_socket);
+                        queued = true;
+                    }
+                }
+                if (queued)
+                {
+                    work_available.notify_one();
+                }
+                else
+                {
+                    ::close(client_socket);
+                    std::cerr << "Connection rejected: waiting queue is full.\n";
+                }
             }
             catch (...)
             {
                 ::close(client_socket);
-                std::cerr << "Could not start client worker.\n";
+                std::cerr << "Could not queue client connection.\n";
                 exit_status = EXIT_FAILURE;
-            }
-
-            const int restore_error = ::pthread_sigmask(
-                SIG_SETMASK, &previous_mask, nullptr);
-            if (restore_error != 0)
-            {
-                std::cerr << "Could not restore shutdown signals: " << restore_error << '\n';
-                exit_status = EXIT_FAILURE;
-            }
-            if (exit_status != EXIT_SUCCESS)
-            {
                 break;
             }
         }
 
         ::close(socket_server);
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            stopping = true;
+
+            while (!pending_connections.empty())
+            {
+                ::close(pending_connections.front());
+                pending_connections.pop();
+            }
+        }
+        work_available.notify_all();
+
         for (std::thread &worker : workers)
         {
             worker.join();
