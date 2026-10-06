@@ -78,7 +78,7 @@ if(BUILD_TESTING)
     )
 
     set_tests_properties(kv_server_integration_tests PROPERTIES
-        TIMEOUT 15
+        TIMEOUT 30
     )
 endif()
 

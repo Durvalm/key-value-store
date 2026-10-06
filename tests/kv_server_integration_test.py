@@ -67,11 +67,68 @@ def expect_line(stream, expected):
         raise AssertionError(f"expected {expected!r}, received {actual!r}")
 
 
+def test_worker_pool(server_executable, database_path, port):
+    server = start_server(server_executable, database_path, port, idle_timeout=5)
+    active_clients = []
+    queued_clients = []
+
+    try:
+        for _ in range(2):
+            client = open_client(port)
+            client.sendall(b'SET "unfinished" "request"')
+            active_clients.append(client)
+
+        time.sleep(0.05)
+
+        third_client = open_client(port)
+        third_client.sendall(b"SIZE\n")
+        third_client.settimeout(0.2)
+        try:
+            response = third_client.recv(1024)
+        except socket.timeout:
+            response = None
+
+        if response is not None:
+            raise AssertionError(
+                f"queued client responded before a worker was available: {response!r}"
+            )
+
+        active_clients.pop().close()
+        third_client.settimeout(2)
+        with third_client, third_client.makefile("rb") as stream:
+            expect_line(stream, b"INTEGER 0\n")
+
+        # Fill the bounded application queue while both workers are occupied.
+        replacement = open_client(port)
+        replacement.sendall(b'SET "also-unfinished" "request"')
+        active_clients.append(replacement)
+        time.sleep(0.05)
+
+        for _ in range(16):
+            queued_clients.append(open_client(port))
+
+        time.sleep(0.05)
+        overflow = open_client(port)
+        overflow.settimeout(2)
+        with overflow:
+            if overflow.recv(1) != b"":
+                raise AssertionError("queue overflow connection was not rejected")
+    finally:
+        for client in active_clients:
+            client.close()
+        for client in queued_clients:
+            client.close()
+        stop_server(server)
+
+
 def test_server(server_executable, client_executable):
     with tempfile.TemporaryDirectory(prefix="kv_server_test_") as temporary_directory:
         directory = Path(temporary_directory)
         database_path = directory / "server.log"
         port = choose_port()
+
+        test_worker_pool(server_executable, database_path, port)
+
         server = start_server(server_executable, database_path, port)
 
         try:
@@ -180,26 +237,35 @@ def test_server(server_executable, client_executable):
         finally:
             stop_server(server)
 
-        # SIGINT interrupts a blocked recv without executing buffered input.
-        server = start_server(server_executable, database_path, port)
-        with open_client(port) as client:
-            client.sendall(b'SET "shutdown-incomplete" "must not execute"')
+        # SIGINT closes active and queued connections without executing buffered input.
+        server = start_server(server_executable, database_path, port, idle_timeout=30)
+        with open_client(port) as first_client, open_client(port) as second_client, open_client(port) as queued_client:
+            first_client.sendall(b'SET "shutdown-incomplete" "must not execute"')
+            second_client.sendall(b'SET "also-incomplete" "must not execute"')
+            queued_client.sendall(b'SET "queued-incomplete" "must not execute"\n')
+            time.sleep(0.05)
             server.send_signal(signal.SIGINT)
             server.wait(timeout=2)
             if server.returncode != 0:
                 raise AssertionError(f"server did not shut down cleanly: {server.returncode}")
-            client.settimeout(2)
-            try:
-                remaining = client.recv(1)
-            except ConnectionResetError:
-                remaining = b""
-            if remaining != b"":
-                raise AssertionError("graceful shutdown did not close the active client")
+
+            for client in (first_client, second_client, queued_client):
+                client.settimeout(2)
+                try:
+                    remaining = client.recv(1)
+                except ConnectionResetError:
+                    remaining = b""
+                if remaining != b"":
+                    raise AssertionError("graceful shutdown did not close every client")
 
         server = start_server(server_executable, database_path, port)
         try:
             with open_client(port) as client, client.makefile("rb") as stream:
                 client.sendall(b'GET "shutdown-incomplete"\n')
+                expect_line(stream, b"NOT_FOUND\n")
+                client.sendall(b'GET "also-incomplete"\n')
+                expect_line(stream, b"NOT_FOUND\n")
+                client.sendall(b'GET "queued-incomplete"\n')
                 expect_line(stream, b"NOT_FOUND\n")
         finally:
             stop_server(server)

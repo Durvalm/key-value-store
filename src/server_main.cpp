@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
@@ -146,17 +147,28 @@ namespace
     void handle_client(int client_socket, KeyValueStore &store, unsigned int idle_timeout_seconds)
     {
 
-        timeval receive_timeout{};
-        receive_timeout.tv_sec = static_cast<decltype(receive_timeout.tv_sec)>(idle_timeout_seconds);
+        timeval io_timeout{};
+        io_timeout.tv_sec = static_cast<decltype(io_timeout.tv_sec)>(idle_timeout_seconds);
 
         if (::setsockopt(
                 client_socket,
                 SOL_SOCKET,
                 SO_RCVTIMEO,
-                &receive_timeout,
-                sizeof(receive_timeout)) == -1)
+                &io_timeout,
+                sizeof(io_timeout)) == -1)
         {
             std::perror("setsockopt SO_RCVTIMEO");
+            return;
+        }
+
+        if (::setsockopt(
+                client_socket,
+                SOL_SOCKET,
+                SO_SNDTIMEO,
+                &io_timeout,
+                sizeof(io_timeout)) == -1)
+        {
+            std::perror("setsockopt SO_SNDTIMEO");
             return;
         }
 
@@ -296,9 +308,13 @@ namespace
         std::mutex queue_mutex;
         std::condition_variable work_available;
         bool stopping = false;
+        std::array<int, max_threads> active_connections{};
+        active_connections.fill(-1);
 
         // Start the threads array with lambda functions (we dont have the connections/client_id yet)
-        auto worker_task = [&pending_connections, &queue_mutex, &work_available, &stopping, &store, idle_timeout_seconds]()
+        auto worker_task = [&pending_connections, &queue_mutex, &work_available,
+                            &stopping, &active_connections, &store,
+                            idle_timeout_seconds](std::size_t worker_index)
         {
             while (true)
             {
@@ -314,6 +330,7 @@ namespace
                     }
                     client_socket = pending_connections.front();
                     pending_connections.pop();
+                    active_connections[worker_index] = client_socket;
                 }
                 try
                 {
@@ -326,6 +343,11 @@ namespace
                 catch (...)
                 {
                     std::cerr << "Client handler failed.\n";
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex);
+                    active_connections[worker_index] = -1;
                 }
                 ::close(client_socket);
             }
@@ -349,7 +371,7 @@ namespace
         {
             for (std::size_t i = 0; i < max_threads; ++i)
             {
-                workers.emplace_back(worker_task);
+                workers.emplace_back(worker_task, i);
             }
         }
         catch (...)
@@ -445,6 +467,14 @@ namespace
             {
                 ::close(pending_connections.front());
                 pending_connections.pop();
+            }
+
+            for (const int client_socket : active_connections)
+            {
+                if (client_socket != -1)
+                {
+                    ::shutdown(client_socket, SHUT_RDWR);
+                }
             }
         }
         work_available.notify_all();
