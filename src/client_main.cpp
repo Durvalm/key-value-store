@@ -13,7 +13,7 @@
 
 namespace
 {
-    constexpr std::uint16_t server_port = 6380;
+    constexpr std::uint16_t default_server_port = 6380;
 
     bool parse_port(const std::string &text, std::uint16_t &port)
     {
@@ -211,7 +211,7 @@ int main(int argc, char *argv[])
 
     const std::string server_address = argc > 1 ? argv[1] : "127.0.0.1";
 
-    std::uint16_t port = server_port;
+    std::uint16_t port = default_server_port;
 
     if (argc == 3 && !parse_port(argv[2], port))
     {

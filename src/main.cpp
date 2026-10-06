@@ -6,7 +6,7 @@
 int main(int argc, char *argv[])
 {
     const std::string file_path = argc > 1 ? argv[1] : "kv_store.log";
-    KeyValueStore cache(file_path);
+    KeyValueStore store(file_path);
     std::string line;
 
     std::cout << "Key Value Store\n";
@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
             // Input ended, such as when the user presses Ctrl+D.
             break;
         }
-        CommandResult result = process_command(line, cache);
+        CommandResult result = process_command(line, store);
         std::cout << result.response;
         if (result.close_requested)
         {

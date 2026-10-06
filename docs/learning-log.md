@@ -37,8 +37,21 @@ not claims that every topic is mastered.
 - **Signals are notifications to a process.** Ctrl-C normally generates SIGINT for the foreground process group. Registering a handler changes the response to that signal; it does not enable Ctrl-C detection.
 - **Graceful shutdown needs ordinary cleanup code.** A signal handler requests shutdown; the normal program flow releases resources. Signal interruption and network timeout are different reasons for a blocked call to return.
 - **Limits are part of correctness.** Without a request-size cap, incomplete input can consume growing memory. Without time limits, a stalled client can occupy service capacity indefinitely.
-- **Concurrency is the next problem.** Multiple handlers must coordinate access to both the map and the log. Protecting memory alone is insufficient if replay later produces a different state.
+
+## Concurrency and Shared State
+
+- **Concurrency is about overlapping progress; parallelism is simultaneous execution.** A server benefits from concurrency even on one CPU because one worker can run while another waits for network data.
+- **Threads share process memory but have separate execution state.** Every worker can access the same store and connection queue, while local variables such as `pending_data` belong to one client-handling call.
+- **A mutex protects an invariant, not merely a variable.** The store lock keeps the map update and persistence-log append in one ordered operation so memory and restart recovery agree.
+- **Lock scope determines both correctness and contention.** Queue operations happen under the queue lock, but receiving, sending, and handling a client happen after releasing it. One slow client therefore does not block connection scheduling.
+- **A condition variable coordinates sleeping and waking.** Workers sleep while the queue is empty. The queue remembers pending work; a notification only prompts a worker to check the condition again.
+- **A worker pool bounds concurrency and reuses threads.** A fixed number of workers repeatedly handle sockets from a bounded queue instead of creating an unlimited thread for every client.
+- **Backpressure is a resource policy.** When active workers and the waiting queue are full, rejecting another connection protects memory and file-descriptor capacity.
+- **Ownership makes cleanup understandable.** Main accepts and queues sockets; a worker owns a socket after removing it. During shutdown, main disables active communication, while the owning worker performs the final close.
+- **Joining is a lifetime guarantee.** Main waits for workers before destroying the shared store, queue, mutex, or condition variable they reference.
+- **Signals and worker coordination solve different problems.** The signal handler asks main to stop; the stop flag, socket shutdown, condition-variable notification, and joins coordinate the actual worker shutdown.
+- **Thread safety does not create transactions.** Making each store operation atomic does not make a sequence such as GET followed by SET atomic.
 
 ## Still to Learn
 
-Threads and shared memory; synchronization; bounded worker pools; coordinated shutdown across workers; measuring the actual bottleneck before optimizing.
+Measuring contention and actual bottlenecks; asynchronous I/O; replication ordering; consistency across multiple processes and machines.

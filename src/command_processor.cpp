@@ -46,7 +46,7 @@ CommandResult request_too_large_result()
     return error_result("REQUEST_TOO_LARGE", "Request exceeds 4096 bytes");
 }
 
-CommandResult process_command(const std::string &line, KeyValueStore &cache)
+CommandResult process_command(const std::string &line, KeyValueStore &store)
 {
     if (line.size() > max_request_size)
     {
@@ -86,7 +86,7 @@ CommandResult process_command(const std::string &line, KeyValueStore &cache)
                     "Usage: SET \"<key>\" \"<value>\"");
             }
 
-            cache.set(key, value);
+            store.set(key, value);
             return {"OK\n", false};
         }
         else if (command == "GET")
@@ -98,7 +98,7 @@ CommandResult process_command(const std::string &line, KeyValueStore &cache)
                 return error_result("INVALID_ARGUMENT", "Usage: GET \"<key>\"");
             }
 
-            const std::optional<std::string> value = cache.get(key);
+            const std::optional<std::string> value = store.get(key);
             return value.has_value() ? value_result(value.value()) : CommandResult{"NOT_FOUND\n", false};
         }
         else if (command == "DELETE")
@@ -110,7 +110,7 @@ CommandResult process_command(const std::string &line, KeyValueStore &cache)
                 return error_result("INVALID_ARGUMENT", "Usage: DELETE \"<key>\"");
             }
 
-            const bool removed = cache.remove(key);
+            const bool removed = store.remove(key);
             return {removed ? "INTEGER 1\n" : "INTEGER 0\n", false};
         }
         else if (command == "SIZE")
@@ -120,7 +120,7 @@ CommandResult process_command(const std::string &line, KeyValueStore &cache)
                 return error_result("INVALID_ARGUMENT", "Usage: SIZE");
             }
 
-            return {"INTEGER " + std::to_string(cache.size()) + "\n", false};
+            return {"INTEGER " + std::to_string(store.size()) + "\n", false};
         }
         else if (command == "HELP")
         {
@@ -142,7 +142,7 @@ CommandResult process_command(const std::string &line, KeyValueStore &cache)
                 return error_result("INVALID_ARGUMENT", "Usage: EXISTS \"<key>\"");
             }
 
-            return {cache.contains(key) ? "INTEGER 1\n" : "INTEGER 0\n", false};
+            return {store.contains(key) ? "INTEGER 1\n" : "INTEGER 0\n", false};
         }
         else if (command == "EXIT")
         {
@@ -160,7 +160,7 @@ CommandResult process_command(const std::string &line, KeyValueStore &cache)
                 return error_result("INVALID_ARGUMENT", "Usage: COMPACT");
             }
 
-            cache.compact();
+            store.compact();
             return {"OK\n", false};
         }
     }

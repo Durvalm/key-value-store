@@ -26,11 +26,11 @@
 
 namespace
 {
-    constexpr std::uint16_t server_port = 6380;
+    constexpr std::uint16_t default_server_port = 6380;
     constexpr unsigned int default_idle_timeout_seconds = 120;
     constexpr unsigned int max_idle_timeout_seconds = 3600;
-    constexpr std::size_t max_threads = 2;
-    constexpr std::size_t max_pending_connections = 16;
+    constexpr std::size_t worker_count = 2;
+    constexpr std::size_t pending_connection_capacity = 16;
 
     volatile std::sig_atomic_t shutdown_requested = 0;
 
@@ -255,9 +255,9 @@ namespace
     {
         KeyValueStore store(file_path);
 
-        const int socket_server = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        const int listening_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
-        if (socket_server == -1)
+        if (listening_socket == -1)
         {
             std::perror("socket");
             return EXIT_FAILURE;
@@ -266,14 +266,14 @@ namespace
         int reuse_address = 1;
 
         if (::setsockopt(
-                socket_server,
+                listening_socket,
                 SOL_SOCKET,
                 SO_REUSEADDR,
                 &reuse_address,
                 sizeof(reuse_address)) == -1)
         {
             std::perror("setsockopt");
-            ::close(socket_server);
+            ::close(listening_socket);
             return EXIT_FAILURE;
         }
 
@@ -283,19 +283,21 @@ namespace
         server_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
         if (::bind(
-                socket_server,
+                listening_socket,
                 reinterpret_cast<const sockaddr *>(&server_address),
                 sizeof(server_address)) == -1)
         {
             std::perror("bind");
-            ::close(socket_server);
+            ::close(listening_socket);
             return EXIT_FAILURE;
         }
 
-        if (::listen(socket_server, 1) == -1)
+        if (::listen(
+                listening_socket,
+                static_cast<int>(pending_connection_capacity)) == -1)
         {
             std::perror("listen");
-            ::close(socket_server);
+            ::close(listening_socket);
             return EXIT_FAILURE;
         }
 
@@ -304,33 +306,34 @@ namespace
         std::vector<std::thread> workers;
         int exit_status = EXIT_SUCCESS;
 
-        std::queue<int> pending_connections;
-        std::mutex queue_mutex;
-        std::condition_variable work_available;
-        bool stopping = false;
-        std::array<int, max_threads> active_connections{};
-        active_connections.fill(-1);
+        std::queue<int> pending_client_sockets;
+        std::mutex connection_state_mutex;
+        std::condition_variable queue_condition;
+        bool workers_stopping = false;
+        std::array<int, worker_count> active_client_sockets{};
+        active_client_sockets.fill(-1);
 
-        // Start the threads array with lambda functions (we dont have the connections/client_id yet)
-        auto worker_task = [&pending_connections, &queue_mutex, &work_available,
-                            &stopping, &active_connections, &store,
+        // Workers share the queue but own one active client socket at a time.
+        auto worker_task = [&pending_client_sockets, &connection_state_mutex,
+                            &queue_condition, &workers_stopping,
+                            &active_client_sockets, &store,
                             idle_timeout_seconds](std::size_t worker_index)
         {
             while (true)
             {
                 int client_socket;
                 {
-                    std::unique_lock<std::mutex> lock(queue_mutex);
+                    std::unique_lock<std::mutex> lock(connection_state_mutex);
 
-                    work_available.wait(lock, [&]()
-                                        { return stopping || !pending_connections.empty(); });
-                    if (stopping)
+                    queue_condition.wait(lock, [&]()
+                                         { return workers_stopping || !pending_client_sockets.empty(); });
+                    if (workers_stopping)
                     {
                         return;
                     }
-                    client_socket = pending_connections.front();
-                    pending_connections.pop();
-                    active_connections[worker_index] = client_socket;
+                    client_socket = pending_client_sockets.front();
+                    pending_client_sockets.pop();
+                    active_client_sockets[worker_index] = client_socket;
                 }
                 try
                 {
@@ -346,8 +349,8 @@ namespace
                 }
 
                 {
-                    std::lock_guard<std::mutex> lock(queue_mutex);
-                    active_connections[worker_index] = -1;
+                    std::lock_guard<std::mutex> lock(connection_state_mutex);
+                    active_client_sockets[worker_index] = -1;
                 }
                 ::close(client_socket);
             }
@@ -364,12 +367,12 @@ namespace
         if (mask_error != 0)
         {
             std::cerr << "Could not block shutdown signals: " << mask_error << '\n';
-            ::close(socket_server);
+            ::close(listening_socket);
             return EXIT_FAILURE;
         }
         try
         {
-            for (std::size_t i = 0; i < max_threads; ++i)
+            for (std::size_t i = 0; i < worker_count; ++i)
             {
                 workers.emplace_back(worker_task, i);
             }
@@ -393,23 +396,23 @@ namespace
         if (exit_status != EXIT_SUCCESS)
         {
             {
-                std::lock_guard<std::mutex> lock(queue_mutex);
-                stopping = true;
+                std::lock_guard<std::mutex> lock(connection_state_mutex);
+                workers_stopping = true;
             }
-            work_available.notify_all();
+            queue_condition.notify_all();
 
             for (std::thread &worker : workers)
             {
                 worker.join();
             }
 
-            ::close(socket_server);
+            ::close(listening_socket);
             return EXIT_FAILURE;
         }
 
         while (!shutdown_requested)
         {
-            const int client_socket = ::accept(socket_server, nullptr, nullptr);
+            const int client_socket = ::accept(listening_socket, nullptr, nullptr);
 
             if (client_socket == -1)
             {
@@ -432,16 +435,16 @@ namespace
             {
                 bool queued = false;
                 {
-                    std::lock_guard<std::mutex> lock(queue_mutex);
-                    if (pending_connections.size() < max_pending_connections)
+                    std::lock_guard<std::mutex> lock(connection_state_mutex);
+                    if (pending_client_sockets.size() < pending_connection_capacity)
                     {
-                        pending_connections.emplace(client_socket);
+                        pending_client_sockets.emplace(client_socket);
                         queued = true;
                     }
                 }
                 if (queued)
                 {
-                    work_available.notify_one();
+                    queue_condition.notify_one();
                 }
                 else
                 {
@@ -458,18 +461,18 @@ namespace
             }
         }
 
-        ::close(socket_server);
+        ::close(listening_socket);
         {
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            stopping = true;
+            std::lock_guard<std::mutex> lock(connection_state_mutex);
+            workers_stopping = true;
 
-            while (!pending_connections.empty())
+            while (!pending_client_sockets.empty())
             {
-                ::close(pending_connections.front());
-                pending_connections.pop();
+                ::close(pending_client_sockets.front());
+                pending_client_sockets.pop();
             }
 
-            for (const int client_socket : active_connections)
+            for (const int client_socket : active_client_sockets)
             {
                 if (client_socket != -1)
                 {
@@ -477,7 +480,7 @@ namespace
                 }
             }
         }
-        work_available.notify_all();
+        queue_condition.notify_all();
 
         for (std::thread &worker : workers)
         {
@@ -500,7 +503,7 @@ int main(int argc, char *argv[])
     const std::string file_path =
         argc > 1 ? argv[1] : "kv_server.log";
 
-    std::uint16_t port = server_port;
+    std::uint16_t port = default_server_port;
     unsigned int idle_timeout_seconds = default_idle_timeout_seconds;
 
     if (argc >= 3 && !parse_port(argv[2], port))
