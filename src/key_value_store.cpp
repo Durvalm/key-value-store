@@ -55,6 +55,8 @@ void KeyValueStore::set(
     std::ostringstream record;
     record << "SET " << std::quoted(key) << ' ' << std::quoted(value);
 
+    std::lock_guard<std::mutex> lock(mutex_);
+
     append_record(record.str());
 
     data_[key] = value;
@@ -63,6 +65,8 @@ void KeyValueStore::set(
 std::optional<std::string> KeyValueStore::get(
     const std::string &key) const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
+
     auto entry = data_.find(key);
     if (entry == data_.end())
     {
@@ -75,6 +79,9 @@ bool KeyValueStore::remove(
     const std::string &key)
 {
     validate_field(key, "Key");
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
     if (!data_.contains(key))
     {
         return false;
@@ -112,12 +119,14 @@ void KeyValueStore::append_record(const std::string &record)
 std::size_t
 KeyValueStore::size() const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     return data_.size();
 }
 
 bool KeyValueStore::contains(
     const std::string &key) const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     return data_.contains(key);
 }
 
@@ -127,6 +136,8 @@ void KeyValueStore::compact()
     {
         return;
     }
+
+    std::lock_guard<std::mutex> lock(mutex_);
 
     std::filesystem::path temporary_path = file_path_;
     temporary_path += ".tmp";

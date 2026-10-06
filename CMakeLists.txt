@@ -10,10 +10,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(Threads REQUIRED)
+
 add_library(kv_store
     src/key_value_store.cpp
     src/command_processor.cpp
 )
+
+target_link_libraries(kv_store PUBLIC Threads::Threads)
 
 target_include_directories(kv_store
     PUBLIC
@@ -61,6 +65,8 @@ if(BUILD_TESTING)
         NAME kv_store_tests
         COMMAND kv_store_tests
     )
+
+    set_tests_properties(kv_store_tests PROPERTIES TIMEOUT 30)
 
     add_test(
         NAME kv_server_integration_tests

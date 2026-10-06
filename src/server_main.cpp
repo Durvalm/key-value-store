@@ -31,9 +31,7 @@ namespace
 
     bool install_signal_handlers()
     {
-        struct sigaction shutdown_action
-        {
-        };
+        struct sigaction shutdown_action{};
         shutdown_action.sa_handler = request_shutdown;
         sigemptyset(&shutdown_action.sa_mask);
         shutdown_action.sa_flags = 0;
@@ -44,9 +42,7 @@ namespace
             return false;
         }
 
-        struct sigaction ignored_action
-        {
-        };
+        struct sigaction ignored_action{};
         ignored_action.sa_handler = SIG_IGN;
         sigemptyset(&ignored_action.sa_mask);
         ignored_action.sa_flags = 0;
@@ -143,6 +139,104 @@ namespace
         return true;
     }
 
+    void handle_client(int client_socket, KeyValueStore &store, unsigned int idle_timeout_seconds)
+    {
+
+        timeval receive_timeout{};
+        receive_timeout.tv_sec = static_cast<decltype(receive_timeout.tv_sec)>(idle_timeout_seconds);
+
+        if (::setsockopt(
+                client_socket,
+                SOL_SOCKET,
+                SO_RCVTIMEO,
+                &receive_timeout,
+                sizeof(receive_timeout)) == -1)
+        {
+            std::perror("setsockopt SO_RCVTIMEO");
+            return;
+        }
+
+        std::string pending_data;
+        bool client_connected = true;
+
+        while (client_connected && !shutdown_requested)
+        {
+            char buffer[1024];
+            const ssize_t bytes_received =
+                ::recv(client_socket, buffer, sizeof(buffer), 0);
+
+            if (bytes_received == -1)
+            {
+                if (errno == EINTR)
+                {
+                    if (shutdown_requested)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    std::cerr << "Client disconnected after "
+                              << idle_timeout_seconds
+                              << " seconds without a complete request.\n";
+                    break;
+                }
+
+                std::perror("recv");
+                break;
+            }
+
+            if (bytes_received == 0)
+            {
+                if (!pending_data.empty())
+                {
+                    std::cerr << "Warning: discarding incomplete request from disconnected client.\n";
+                }
+                break;
+            }
+
+            pending_data.append(
+                buffer,
+                static_cast<std::size_t>(bytes_received));
+
+            std::size_t newline_position;
+
+            while ((newline_position = pending_data.find('\n')) != std::string::npos)
+            {
+                // process_command expects the request without its framing newline.
+                const std::string request =
+                    pending_data.substr(0, newline_position);
+
+                // Remove the request and its newline from pending_data.
+                pending_data.erase(0, newline_position + 1);
+
+                const CommandResult result =
+                    process_command(request, store);
+
+                if (!send_all(client_socket, result.response))
+                {
+                    client_connected = false;
+                    break;
+                }
+
+                if (result.close_requested)
+                {
+                    client_connected = false;
+                    break;
+                }
+            }
+
+            if (client_connected && pending_data.size() > max_request_size)
+            {
+                send_all(client_socket, request_too_large_result().response);
+                client_connected = false;
+            }
+        }
+    }
+
     int run_server(
         const std::string &file_path,
         std::uint16_t port,
@@ -217,101 +311,7 @@ namespace
                 return EXIT_FAILURE;
             }
 
-            timeval receive_timeout{};
-            receive_timeout.tv_sec = static_cast<decltype(receive_timeout.tv_sec)>(idle_timeout_seconds);
-
-            if (::setsockopt(
-                    client_socket,
-                    SOL_SOCKET,
-                    SO_RCVTIMEO,
-                    &receive_timeout,
-                    sizeof(receive_timeout)) == -1)
-            {
-                std::perror("setsockopt SO_RCVTIMEO");
-                ::close(client_socket);
-                ::close(socket_server);
-                return EXIT_FAILURE;
-            }
-
-            std::string pending_data;
-            bool client_connected = true;
-
-            while (client_connected && !shutdown_requested)
-            {
-                char buffer[1024];
-                const ssize_t bytes_received =
-                    ::recv(client_socket, buffer, sizeof(buffer), 0);
-
-                if (bytes_received == -1)
-                {
-                    if (errno == EINTR)
-                    {
-                        if (shutdown_requested)
-                        {
-                            break;
-                        }
-
-                        continue;
-                    }
-
-                    if (errno == EAGAIN || errno == EWOULDBLOCK)
-                    {
-                        std::cerr << "Client disconnected after "
-                                  << idle_timeout_seconds
-                                  << " seconds without a complete request.\n";
-                        break;
-                    }
-
-                    std::perror("recv");
-                    break;
-                }
-
-                if (bytes_received == 0)
-                {
-                    if (!pending_data.empty())
-                    {
-                        std::cerr << "Warning: discarding incomplete request from disconnected client.\n";
-                    }
-                    break;
-                }
-
-                pending_data.append(
-                    buffer,
-                    static_cast<std::size_t>(bytes_received));
-
-                std::size_t newline_position;
-
-                while ((newline_position = pending_data.find('\n')) != std::string::npos)
-                {
-                    // process_command expects the request without its framing newline.
-                    const std::string request =
-                        pending_data.substr(0, newline_position);
-
-                    // Remove the request and its newline from pending_data.
-                    pending_data.erase(0, newline_position + 1);
-
-                    const CommandResult result =
-                        process_command(request, store);
-
-                    if (!send_all(client_socket, result.response))
-                    {
-                        client_connected = false;
-                        break;
-                    }
-
-                    if (result.close_requested)
-                    {
-                        client_connected = false;
-                        break;
-                    }
-                }
-
-                if (client_connected && pending_data.size() > max_request_size)
-                {
-                    send_all(client_socket, request_too_large_result().response);
-                    client_connected = false;
-                }
-            }
+            handle_client(client_socket, store, idle_timeout_seconds);
 
             ::close(client_socket);
         }

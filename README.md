@@ -46,6 +46,8 @@ Expose the store over a network through:
 
 ### 4. Concurrency
 
+See [Concurrency Requirements](docs/concurrency-requirements.md) for shared-state guarantees, worker limits, shutdown behavior, and learning checkpoints.
+
 Support multiple clients while exploring:
 
 - Threads and thread pools

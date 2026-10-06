@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <mutex>
 
 class KeyValueStore
 {
@@ -23,4 +24,5 @@ private:
     void append_record(const std::string &record);
     std::string file_path_;
     std::unordered_map<std::string, std::string> data_;
+    mutable std::mutex mutex_;
 };

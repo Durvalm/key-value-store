@@ -2,12 +2,15 @@
 #include "key_value_store.h"
 
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <latch>
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace
 {
@@ -68,6 +71,123 @@ namespace
         catch (const std::runtime_error &)
         {
         }
+    }
+
+    void run_concurrently(
+        const std::function<void()> &first_operation,
+        const std::function<void()> &second_operation)
+    {
+        std::latch start(2);
+        std::exception_ptr first_error;
+        std::exception_ptr second_error;
+
+        auto run = [&start](const std::function<void()> &operation,
+                            std::exception_ptr &error)
+        {
+            start.arrive_and_wait();
+            try
+            {
+                operation();
+            }
+            catch (...)
+            {
+                error = std::current_exception();
+            }
+        };
+
+        std::thread first(run, std::cref(first_operation), std::ref(first_error));
+        std::thread second(run, std::cref(second_operation), std::ref(second_error));
+        first.join();
+        second.join();
+
+        // Keep the assertion counter and diagnostics on the main thread.
+        expect(!first_error, "first concurrent worker completes without throwing");
+        expect(!second_error, "second concurrent worker completes without throwing");
+    }
+
+    void test_concurrent_distinct_keys()
+    {
+        KeyValueStore store;
+        auto insert = [&store](const std::string &prefix)
+        {
+            for (int i = 0; i < 1000; ++i)
+            {
+                store.set(prefix + std::to_string(i), std::to_string(i));
+            }
+        };
+
+        run_concurrently([&]() { insert("a-"); }, [&]() { insert("b-"); });
+
+        expect(store.size() == 2000, "concurrent inserts preserve all 2000 keys");
+        for (const std::string prefix : {"a-", "b-"})
+        {
+            for (int i = 0; i < 1000; ++i)
+            {
+                const std::string key = prefix + std::to_string(i);
+                expect(store.get(key).value_or("") == std::to_string(i),
+                       "concurrent insert preserves value for " + key);
+            }
+        }
+    }
+
+    void test_concurrent_delete()
+    {
+        KeyValueStore store;
+        store.set("shared", "value");
+        bool first_removed = false;
+        bool second_removed = false;
+
+        run_concurrently(
+            [&]() { first_removed = store.remove("shared"); },
+            [&]() { second_removed = store.remove("shared"); });
+
+        expect(first_removed != second_removed, "exactly one concurrent DELETE succeeds");
+        expect(!store.contains("shared"), "concurrently deleted key is absent");
+        expect(store.size() == 0, "concurrent deletes leave an empty store");
+    }
+
+    void test_concurrent_persistence()
+    {
+        const auto file_path = test_file("concurrent_restart_test");
+        std::filesystem::remove(file_path);
+        std::string final_shared_value;
+
+        {
+            KeyValueStore store(file_path.string());
+            auto insert = [&store](const std::string &prefix)
+            {
+                for (int i = 0; i < 100; ++i)
+                {
+                    const std::string key = prefix + std::to_string(i);
+                    store.set(key, key);
+                    store.set("shared", key);
+                }
+            };
+
+            run_concurrently([&]() { insert("a-"); }, [&]() { insert("b-"); });
+            expect(store.size() == 201, "concurrent persistent writes preserve all keys");
+            final_shared_value = store.get("shared").value_or("");
+            expect(final_shared_value == "a-99" || final_shared_value == "b-99",
+                   "either concurrent writer may produce the final shared value");
+        }
+
+        {
+            KeyValueStore recovered(file_path.string());
+            expect(recovered.size() == 201, "concurrent log replays the correct key count");
+            expect(recovered.get("shared").value_or("") == final_shared_value,
+                   "log ordering agrees with the final in-memory shared value");
+            for (const std::string prefix : {"a-", "b-"})
+            {
+                for (int i = 0; i < 100; ++i)
+                {
+                    const std::string key = prefix + std::to_string(i);
+                    expect(recovered.get(key).value_or("") == key,
+                           "concurrent persistent value survives restart: " + key);
+                }
+            }
+        }
+
+        std::filesystem::remove(file_path);
     }
 
     void test_new_store_is_empty()
@@ -420,6 +540,9 @@ void test_contains()
 
 int main()
 {
+    test_concurrent_distinct_keys();
+    test_concurrent_delete();
+    test_concurrent_persistence();
     test_new_store_is_empty();
     test_set_and_get();
     test_set_overwrites_existing_value();
