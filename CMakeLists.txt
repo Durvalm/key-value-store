@@ -36,6 +36,10 @@ add_executable(kv_client
     src/client_main.cpp
 )
 
+add_executable(kv_benchmark
+    src/benchmark_main.cpp
+)
+
 target_link_libraries(kv_cli
     PRIVATE
         kv_store
@@ -106,6 +110,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         -Wextra
         -Wpedantic
     )
+
+    target_compile_options(kv_benchmark PRIVATE -Wall -Wextra -Wpedantic)
 
     if(BUILD_TESTING)
         target_compile_options(kv_store_tests PRIVATE
