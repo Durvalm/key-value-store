@@ -59,6 +59,8 @@ Support multiple clients while exploring:
 
 ### 5. Performance
 
+See [Performance Requirements](docs/performance-requirements.md) for a small benchmark, plain-language concepts, and one measured improvement.
+
 Measure and improve the system using:
 
 - Repeatable benchmarks
