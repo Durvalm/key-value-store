@@ -6,8 +6,12 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
+#include <exception>
+#include <latch>
+#include <thread>
 #include <csignal>
 #include <cstring>
 #include <iomanip>
@@ -126,11 +130,11 @@ namespace
         }
     }
 
-    void benchmark(int socket, const std::string &workload)
+    void prepare_requests(int socket, const std::string &workload,
+                          std::vector<std::string> &requests,
+                          std::vector<std::string> &expected)
     {
         std::string pending;
-        std::vector<std::string> requests;
-        std::vector<std::string> expected;
         for (std::size_t i = 0; i < key_count; ++i)
         {
             const std::string key = "benchmark-key-" + std::to_string(i);
@@ -150,59 +154,127 @@ namespace
                 expected.push_back("VALUE \"" + value + "\"\n");
             }
         }
+    }
 
-        for (std::size_t i = 0; i < warmup_count; ++i)
+    void benchmark(const std::vector<int> &sockets, const std::string &workload)
+    {
+        const std::size_t count = sockets.size();
+        const std::size_t keys_per_client = key_count / count;
+        const std::size_t requests_per_client = request_count / count;
+        std::vector<std::string> requests;
+        std::vector<std::string> expected;
+        prepare_requests(sockets[0], workload, requests, expected);
+
+        for (std::size_t client = 0; client < count; ++client)
         {
-            const std::size_t index = i % key_count;
-            send_all(socket, requests[index]);
-            if (receive_line(socket, pending) != expected[index])
-                throw std::runtime_error("Unexpected " + workload + " response during warm-up");
+            std::string pending;
+            for (std::size_t i = 0; i < warmup_count / count; ++i)
+            {
+                const std::size_t index = client * keys_per_client + i % keys_per_client;
+                send_all(sockets[client], requests[index]);
+                if (receive_line(sockets[client], pending) != expected[index])
+                    throw std::runtime_error("Unexpected response during warm-up");
+            }
         }
 
-        std::vector<double> latencies;
-        latencies.reserve(request_count);
+        // Allocate before timing. Each thread writes only to its own sample range.
+        std::vector<double> latencies(request_count);
+        std::array<Clock::time_point, 2> finished{};
+        std::array<std::exception_ptr, 2> errors{};
+        std::latch ready(count);
+        std::latch start_gate(1);
+        std::vector<std::thread> threads;
+        threads.reserve(count);
+        try
+        {
+            for (std::size_t client = 0; client < count; ++client)
+            {
+                // Capture the client number by value; it identifies this thread's range.
+                threads.emplace_back([&, client]()
+                {
+                    std::string pending;
+                    ready.count_down();
+                    start_gate.wait();
+                    try
+                    {
+                        for (std::size_t i = 0; i < requests_per_client; ++i)
+                        {
+                            const std::size_t index = client * keys_per_client + i % keys_per_client;
+                            const auto request_start = Clock::now();
+                            send_all(sockets[client], requests[index]);
+                            const std::string response = receive_line(sockets[client], pending);
+                            if (response != expected[index])
+                                throw std::runtime_error("Unexpected response: " + response);
+                            const auto request_end = Clock::now();
+                            latencies[client * requests_per_client + i] =
+                                std::chrono::duration<double, std::micro>(request_end - request_start).count();
+                            finished[client] = request_end;
+                        }
+                    }
+                    catch (...)
+                    {
+                        // A thread cannot throw into main. Save its error for after joining.
+                        errors[client] = std::current_exception();
+                    }
+                });
+            }
+        }
+        catch (...)
+        {
+            // A failed thread creation must not leave earlier threads waiting or unjoined.
+            start_gate.count_down();
+            for (std::thread &thread : threads)
+                thread.join();
+            throw;
+        }
+        ready.wait();
         const auto start = Clock::now();
-        for (std::size_t i = 0; i < request_count; ++i)
+        start_gate.count_down();
+        for (std::thread &thread : threads)
+            thread.join();
+
+        auto last_finished = start;
+        for (std::size_t client = 0; client < count; ++client)
         {
-            const std::size_t index = i % key_count;
-            const auto request_start = Clock::now();
-            send_all(socket, requests[index]);
-            const std::string response = receive_line(socket, pending);
-            if (response != expected[index])
-                throw std::runtime_error("Unexpected " + workload + " response: " + response);
-            const auto request_end = Clock::now();
-            const double microseconds =
-                std::chrono::duration<double, std::micro>(request_end - request_start).count();
-            latencies.push_back(microseconds);
+            if (errors[client])
+                std::rethrow_exception(errors[client]);
+            last_finished = std::max(last_finished, finished[client]);
         }
-        const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
-        // Validation is outside timing, and must pass before reporting success.
+        const double seconds = std::chrono::duration<double>(last_finished - start).count();
         if (workload == "SET")
-            verify_set_values(socket, pending);
+        {
+            std::string pending;
+            verify_set_values(sockets[0], pending);
+        }
         std::sort(latencies.begin(), latencies.end());
         const double median = (latencies[request_count / 2 - 1] + latencies[request_count / 2]) / 2;
         const std::size_t p95_rank = (95 * request_count + 99) / 100;
-
         std::cout << std::fixed << std::setprecision(3)
-                  << "Workload: " << workload << ", 1 client, " << key_count << " keys, " << warmup_count << " warm-up requests\n"
+                  << "Workload: " << workload << ", " << count << " client(s), " << key_count
+                  << " total keys, " << warmup_count << " total warm-up requests\n"
                   << "Completed requests: " << request_count << '\n'
                   << "Total duration (s): " << seconds << '\n'
                   << "Throughput (requests/s): " << request_count / seconds << '\n'
                   << "Median latency (us): " << median << '\n'
                   << "p95 latency (us, nearest rank): " << latencies[p95_rank - 1] << '\n';
     }
+
 }
 
 int main(int argc, char *argv[])
 {
-    // main owns the socket and closes it on both success and failure.
-    int client_socket = -1;
+    // main owns all sockets and closes them after every client thread is joined.
+    std::vector<int> sockets;
     try
     {
-        if (argc > 3)
-            throw std::runtime_error("Usage: kv_benchmark [port] [GET|SET|VERIFY]");
+        if (argc > 4)
+            throw std::runtime_error("Usage: kv_benchmark [port] [GET|SET|VERIFY] [1|2]");
         const std::string text = argc >= 2 ? argv[1] : "6380";
-        const std::string workload = argc == 3 ? argv[2] : "GET";
+        const std::string workload = argc >= 3 ? argv[2] : "GET";
+        const std::string count_text = argc == 4 ? argv[3] : "1";
+        if (count_text != "1" && count_text != "2")
+            throw std::runtime_error("Client count must be 1 or 2");
+        const std::size_t client_count = count_text == "2" ? 2 : 1;
         if (workload != "GET" && workload != "SET" && workload != "VERIFY")
             throw std::runtime_error("Workload must be GET, SET, or VERIFY");
         if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
@@ -212,25 +284,32 @@ int main(int argc, char *argv[])
             throw std::runtime_error("Port must be an integer from 1 to 65535");
         if (::signal(SIGPIPE, SIG_IGN) == SIG_ERR)
             fail("signal");
-        client_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (client_socket == -1)
-            fail("socket");
-        connect_to_server(client_socket, static_cast<unsigned short>(port));
+        // VERIFY needs only one connection, even for a two-client SET log.
+        sockets.resize(workload == "VERIFY" ? 1 : client_count, -1);
+        for (int &socket : sockets)
+        {
+            socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (socket == -1)
+                fail("socket");
+            connect_to_server(socket, static_cast<unsigned short>(port));
+        }
         if (workload == "VERIFY")
         {
             std::string pending;
-            verify_set_values(client_socket, pending);
+            verify_set_values(sockets[0], pending);
             std::cout << "Verified final SET values for " << key_count << " keys (read-only).\n";
         }
         else
-            benchmark(client_socket, workload);
-        ::close(client_socket);
+            benchmark(sockets, workload);
+        for (int &socket : sockets)
+            ::close(socket);
         return 0;
     }
     catch (const std::exception &error)
     {
-        if (client_socket != -1)
-            ::close(client_socket);
+        for (int &socket : sockets)
+            if (socket != -1)
+                ::close(socket);
         std::cerr << "Benchmark failed: " << error.what() << '\n';
         return 1;
     }
