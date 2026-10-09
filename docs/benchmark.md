@@ -280,3 +280,66 @@ supports keeping the log open as an optimization, preserve write ordering, flush
 checks, and correct handling of compaction, then repeat the same four workloads
 with equivalent starting conditions. Normal-restart checks remain required for
 any write optimization we keep.
+
+## Diagnostic: where append time goes
+
+The optional `KV_PROFILE_APPEND` build measures three stages inside
+`append_record()`: open the stream, write/flush the record, and close the stream.
+It accumulates totals under the existing store mutex and prints once when the
+server shuts down, after joining workers. No per-request printing or additional
+mutex is introduced. Normal builds leave these measurements out.
+
+```sh
+cmake -S . -B build-profile -DCMAKE_BUILD_TYPE=Release -DKV_PROFILE_APPEND=ON
+cmake --build build-profile
+```
+
+In terminal 1:
+
+```sh
+benchmark_dir=$(mktemp -d)
+./build-profile/kv_server "$benchmark_dir/store.log" 6381
+```
+
+In terminal 2, run just one SET workload:
+
+```sh
+./build-profile/kv_benchmark 6381 SET 1
+```
+
+Then press Ctrl-C in terminal 1 and save the append diagnostic along with the
+benchmark output. Expect 100,200 successful records, including setup and warm-up.
+The diagnostic prints total time and mean time per record for each stage; these
+means are different from the benchmark's end-to-end median/p95. Repeat with fresh
+logs for `SET 2`. Verify recovery with the same log before cleanup.
+
+The profile uses four clock reads per append and closes the stream explicitly
+to time the close (normally its destructor closes it). A close failure is reported
+before updating memory. This instrumentation adds overhead, so its throughput is
+not an optimization result. The timings exclude serialization before append,
+mutex waiting, map mutation, command parsing, and networking. They can tell us
+which append stage costs more, but cannot alone explain end-to-end latency or
+two-client contention. Stream flush still does not guarantee power-loss durability.
+
+Two clients can have higher throughput and higher latency together: each client
+waits for its own request, but their waits overlap. For example, one sequential
+client averaging 15 microseconds per request would complete about 67,000/s;
+two averaging 18 microseconds each could together complete about 111,000/s.
+This is an idealized explanation using averages, not a formula based on median
+latency. Our combined throughput is measured directly over the whole run.
+
+### Exploratory diagnostic results
+
+One agent-run diagnostic per client count, each using a fresh log, produced:
+
+| SET clients | Successful appends | Mean open (microseconds) | Mean write/flush (microseconds) | Mean close (microseconds) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 100,200 | 7.692 | 6.462 | 5.339 |
+| 2 | 100,200 | 8.370 | 5.158 | 5.743 |
+
+Open plus close accounted for approximately 67% and 73% of the measured append
+stage totals, respectively. This supports investigating whether retaining an
+open log stream saves meaningful work. It does not mean 67–73% of end-to-end
+request latency is removable, or establish the benefit of a change we have not
+implemented. These are single exploratory runs, not repeated performance results.
+SET final-value checks and same-log restart VERIFY passed for both cases.
