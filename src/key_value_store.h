@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -22,7 +23,9 @@ public:
 private:
     void replay();
     void append_record(const std::string &record);
+    void open_log();
     std::string file_path_;
+    std::ofstream log_file_;
     std::unordered_map<std::string, std::string> data_;
     mutable std::mutex mutex_;
 };

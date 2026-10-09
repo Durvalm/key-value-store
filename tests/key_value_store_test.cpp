@@ -440,19 +440,49 @@ namespace
             store.set("language", "C++");
             store.compact();
             store.set("project", "key-value store");
+            store.set("language", "Rust");
+            store.set("temporary", "remove after compaction");
+            store.remove("temporary");
         }
 
         {
             KeyValueStore recovered(file_path.string());
             expect(recovered.size() == 2, "post-compaction append survives restart");
             expect(
-                recovered.get("language").value_or("") == "C++",
-                "compacted data remains after a later append");
+                recovered.get("language").value_or("") == "Rust",
+                "an overwrite after compaction reaches the replacement log");
+            expect(!recovered.contains("temporary"), "a deletion after compaction survives restart");
             expect(
                 recovered.get("project").value_or("") == "key-value store",
                 "a later append is written to the compacted log");
         }
 
+        fs::remove(file_path);
+    }
+
+    void test_failed_compaction_leaves_log_usable()
+    {
+        namespace fs = std::filesystem;
+        const fs::path file_path = test_file("failed_compaction_open_stream_test");
+        fs::path temporary_path = file_path;
+        temporary_path += ".tmp";
+        fs::remove(file_path);
+        // A directory at the temporary file path prevents opening it for writing.
+        fs::create_directory(temporary_path);
+        {
+            KeyValueStore store(file_path.string());
+            store.set("before", "one");
+            const std::string original = read_file(file_path);
+            expect_runtime_error([&]() { store.compact(); }, "failed compaction reports an error");
+            expect(read_file(file_path) == original, "failed compaction preserves the original log");
+            store.set("after", "two");
+        }
+        {
+            KeyValueStore recovered(file_path.string());
+            expect(recovered.get("before").value_or("") == "one", "original data survives failed compaction");
+            expect(recovered.get("after").value_or("") == "two", "writes after failed compaction remain recoverable");
+        }
+        fs::remove(temporary_path);
         fs::remove(file_path);
     }
 
@@ -559,6 +589,7 @@ int main()
     test_compaction_preserves_state_and_removes_history();
     test_in_memory_compaction_is_a_no_op();
     test_mutations_append_after_compaction();
+    test_failed_compaction_leaves_log_usable();
     test_command_processor_mutations_and_queries();
     test_command_processor_rejects_malformed_requests();
     test_command_processor_connection_result();

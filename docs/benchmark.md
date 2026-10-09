@@ -343,3 +343,113 @@ open log stream saves meaningful work. It does not mean 67–73% of end-to-end
 request latency is removable, or establish the benefit of a change we have not
 implemented. These are single exploratory runs, not repeated performance results.
 SET final-value checks and same-log restart VERIFY passed for both cases.
+
+## Optimization: keep the append stream open
+
+The current implementation keeps the log open: the persistent store owns one
+`std::ofstream`, opened after replay. SET and DELETE use that stream, still under
+the existing mutex, and still flush and check it before changing memory. The
+stream closes when the store is destroyed. The default in-memory store remains
+file-free.
+
+Compaction writes and checks its temporary log first, closes the old append
+stream, replaces the log, and opens the replacement for appending. If replacement
+fails, it attempts to reopen the original log before reporting the error. Failure
+to close or reopen is reported; subsequent writes cannot report success through
+a closed or failed stream. External replacement/deletion of the log while the
+server is running is outside this phase; the store owns the log lifecycle.
+Power-loss durability and recovery from partial failed writes remain deferred.
+
+### Before/after measurements
+
+These agent-run comparisons used an Apple M3 Pro (arm64), 18 GiB RAM, macOS 14.1,
+AppleClang 15.0.0, and Release builds without diagnostic instrumentation. The
+baseline revision was `473decdce68ac10fb96e3f478defd52392399ed8`; the after version
+was built from that revision plus the open-stream change, before committing it.
+The benchmark
+code is identical before and after. Each case used 100,000 measured requests,
+100 total keys, 100 total warm-up requests, loopback TCP, and two server workers.
+Key/value lengths are unchanged from the workload descriptions above.
+
+Three before/after pairs were run per case, alternating baseline then optimized
+for each pair. Every run used a fresh temporary directory and dedicated server.
+SET final checks and same-log restart VERIFY passed for every run, and VERIFY did
+not change the log. Setup, replay, and verification are outside benchmark timing.
+The baseline binaries were rebuilt and saved before editing storage code; the
+optimized binaries were rebuilt after the change. Local scheduling/background
+activity was not controlled beyond running comparisons sequentially.
+
+| Workload | Clients | Run | Version | Duration (s) | Requests/s | Median (microseconds) | p95 (microseconds) |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| GET | 1 | 1 | before | 1.503 | 66,553.970 | 14.709 | 17.375 |
+| GET | 1 | 1 | after | 1.495 | 66,883.136 | 14.709 | 17.458 |
+| GET | 1 | 2 | before | 1.502 | 66,591.474 | 14.834 | 17.333 |
+| GET | 1 | 2 | after | 1.497 | 66,807.701 | 14.750 | 17.333 |
+| GET | 1 | 3 | before | 1.499 | 66,728.005 | 14.834 | 17.292 |
+| GET | 1 | 3 | after | 1.497 | 66,801.809 | 14.792 | 17.167 |
+| GET | 2 | 1 | before | 0.884 | 113,069.906 | 17.333 | 23.166 |
+| GET | 2 | 1 | after | 0.881 | 113,519.302 | 17.250 | 22.917 |
+| GET | 2 | 2 | before | 0.880 | 113,662.088 | 17.250 | 22.958 |
+| GET | 2 | 2 | after | 0.884 | 113,166.748 | 17.333 | 22.959 |
+| GET | 2 | 3 | before | 0.879 | 113,762.515 | 17.250 | 23.000 |
+| GET | 2 | 3 | after | 0.887 | 112,734.917 | 17.333 | 23.125 |
+| SET | 1 | 1 | before | 3.060 | 32,678.564 | 29.333 | 36.375 |
+| SET | 1 | 1 | after | 1.819 | 54,976.388 | 17.958 | 20.875 |
+| SET | 1 | 2 | before | 3.063 | 32,646.543 | 29.541 | 35.625 |
+| SET | 1 | 2 | after | 1.822 | 54,897.694 | 18.000 | 20.750 |
+| SET | 1 | 3 | before | 3.055 | 32,733.743 | 29.375 | 36.083 |
+| SET | 1 | 3 | after | 1.820 | 54,941.007 | 17.958 | 21.000 |
+| SET | 2 | 1 | before | 2.125 | 47,057.777 | 41.208 | 51.833 |
+| SET | 2 | 1 | after | 1.109 | 90,194.498 | 21.584 | 27.833 |
+| SET | 2 | 2 | before | 2.172 | 46,048.746 | 41.833 | 54.375 |
+| SET | 2 | 2 | after | 1.099 | 90,980.645 | 21.667 | 27.833 |
+| SET | 2 | 3 | before | 2.349 | 42,574.327 | 46.000 | 56.208 |
+| SET | 2 | 3 | after | 1.107 | 90,333.169 | 21.834 | 27.917 |
+
+Using the median of the three run-level throughput results for each version:
+
+| Workload | Clients | Before requests/s | After requests/s | Change |
+| --- | ---: | ---: | ---: | ---: |
+| GET | 1 | 66,591.474 | 66,807.701 | +0.3% |
+| GET | 2 | 113,662.088 | 113,166.748 | -0.4% |
+| SET | 1 | 32,678.564 | 54,941.007 | +68.1% |
+| SET | 2 | 46,048.746 | 90,333.169 | +96.2% |
+
+SET improved substantially in these comparisons, supporting the hypothesis that
+repeated open/close work was a meaningful cost. Two-client SET may also benefit
+from shorter lock hold times, but mutex waiting was not measured. GET changes
+were below 1%; these small differences do not establish a GET improvement or
+regression. One baseline SET/2 run was slower than the others, so retain the full
+results rather than treating the median gain as an exact universal factor.
+These results remain specific to the small repeated-key local workload.
+
+### Reproduction and correctness
+
+Build and run the current implementation using the Release commands at the top
+of this file. It includes the open-stream improvement; no separate checkout is
+needed for ordinary benchmarks.
+
+The following optional commands build the old version only if you want to
+reproduce the historical before/after comparison. They do not change the current
+checkout:
+
+```sh
+git worktree add --detach ../kv-before-open-log 473decdce68ac10fb96e3f478defd52392399ed8
+cmake -S ../kv-before-open-log -B ../kv-before-open-log/build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build ../kv-before-open-log/build-release
+```
+
+Use the existing fresh-log procedure for each version. From the current project
+directory, baseline executables are
+`../kv-before-open-log/build-release/kv_server` and
+`../kv-before-open-log/build-release/kv_benchmark`; optimized executables are in
+`./build-release/`. Run GET/1, GET/2, SET/1, and SET/2 three times each, alternating
+before/after with a fresh log per invocation. Restart each SET server with its
+same log and use its VERIFY command before cleanup.
+
+Validation: storage and network CTest suites passed. Storage tests cover writes,
+overwrites, and deletes after compaction, and a failed temporary-log creation
+that preserves the old log and allows subsequent recoverable writes. A separate
+file-size-limit experiment forced append/flush failure: SET and DELETE reported
+errors and retained the prior in-memory value. All twelve SET comparison runs
+passed restart verification.

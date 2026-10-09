@@ -42,6 +42,7 @@ KeyValueStore::KeyValueStore(const std::string &file_path)
     : file_path_(file_path)
 {
     replay();
+    open_log();
 }
 
 // Class Methods
@@ -95,24 +96,30 @@ bool KeyValueStore::remove(
     return data_.erase(key) > 0;
 }
 
+void KeyValueStore::open_log()
+{
+    log_file_.clear();
+    log_file_.open(file_path_, std::ios::app);
+    if (!log_file_.is_open())
+        throw std::runtime_error("Could not open persistence file");
+}
+
 void KeyValueStore::append_record(const std::string &record)
 {
     if (file_path_.empty())
         return;
 
-    std::ofstream file(file_path_, std::ios::app);
+    if (!log_file_.is_open())
+        throw std::runtime_error("Persistence file is not open");
 
-    if (!file.is_open())
-        throw std::runtime_error("Could not open persistence file");
+    log_file_ << record << '\n';
 
-    file << record << '\n';
-
-    if (!file)
+    if (!log_file_)
         throw std::runtime_error("Could not write persistence record");
 
-    file.flush();
+    log_file_.flush();
 
-    if (!file)
+    if (!log_file_)
         throw std::runtime_error("Could not flush persistence record");
 }
 
@@ -169,7 +176,23 @@ void KeyValueStore::compact()
         throw std::runtime_error("Could not close compacted log");
     }
 
-    std::filesystem::rename(temporary_path, file_path_);
+    // Close the old stream before replacement; otherwise it could keep writing
+    // to the old file even after rename changes which file the path names.
+    log_file_.close();
+    if (!log_file_)
+        throw std::runtime_error("Could not close persistence file before compaction");
+
+    try
+    {
+        std::filesystem::rename(temporary_path, file_path_);
+    }
+    catch (...)
+    {
+        // Replacement failed: the original log is still the active file.
+        open_log();
+        throw;
+    }
+    open_log();
 }
 
 // Replay method, runs at startup and sends all data in-memory
