@@ -113,7 +113,20 @@ namespace
         }
     }
 
-    void benchmark(int socket)
+    // Read-only check: also usable after restarting the server with the SET log.
+    void verify_set_values(int socket, std::string &pending)
+    {
+        for (std::size_t i = 0; i < key_count; ++i)
+        {
+            const std::string key = "benchmark-key-" + std::to_string(i);
+            const std::string value = "benchmark-write-" + std::to_string(i);
+            send_all(socket, "GET \"" + key + "\"\n");
+            if (receive_line(socket, pending) != "VALUE \"" + value + "\"\n")
+                throw std::runtime_error("Final SET value mismatch for " + key);
+        }
+    }
+
+    void benchmark(int socket, const std::string &workload)
     {
         std::string pending;
         std::vector<std::string> requests;
@@ -125,8 +138,17 @@ namespace
             send_all(socket, "SET \"" + key + "\" \"" + value + "\"\n");
             if (receive_line(socket, pending) != "OK\n")
                 throw std::runtime_error("Key preparation failed");
-            requests.push_back("GET \"" + key + "\"\n");
-            expected.push_back("VALUE \"" + value + "\"\n");
+            if (workload == "SET")
+            {
+                const std::string updated_value = "benchmark-write-" + std::to_string(i);
+                requests.push_back("SET \"" + key + "\" \"" + updated_value + "\"\n");
+                expected.push_back("OK\n");
+            }
+            else
+            {
+                requests.push_back("GET \"" + key + "\"\n");
+                expected.push_back("VALUE \"" + value + "\"\n");
+            }
         }
 
         for (std::size_t i = 0; i < warmup_count; ++i)
@@ -134,7 +156,7 @@ namespace
             const std::size_t index = i % key_count;
             send_all(socket, requests[index]);
             if (receive_line(socket, pending) != expected[index])
-                throw std::runtime_error("Unexpected GET response during warm-up");
+                throw std::runtime_error("Unexpected " + workload + " response during warm-up");
         }
 
         std::vector<double> latencies;
@@ -147,19 +169,22 @@ namespace
             send_all(socket, requests[index]);
             const std::string response = receive_line(socket, pending);
             if (response != expected[index])
-                throw std::runtime_error("Unexpected GET response: " + response);
+                throw std::runtime_error("Unexpected " + workload + " response: " + response);
             const auto request_end = Clock::now();
             const double microseconds =
                 std::chrono::duration<double, std::micro>(request_end - request_start).count();
             latencies.push_back(microseconds);
         }
         const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
+        // Validation is outside timing, and must pass before reporting success.
+        if (workload == "SET")
+            verify_set_values(socket, pending);
         std::sort(latencies.begin(), latencies.end());
         const double median = (latencies[request_count / 2 - 1] + latencies[request_count / 2]) / 2;
         const std::size_t p95_rank = (95 * request_count + 99) / 100;
 
         std::cout << std::fixed << std::setprecision(3)
-                  << "Workload: GET, 1 client, " << key_count << " keys, " << warmup_count << " warm-up requests\n"
+                  << "Workload: " << workload << ", 1 client, " << key_count << " keys, " << warmup_count << " warm-up requests\n"
                   << "Completed requests: " << request_count << '\n'
                   << "Total duration (s): " << seconds << '\n'
                   << "Throughput (requests/s): " << request_count / seconds << '\n'
@@ -174,9 +199,12 @@ int main(int argc, char *argv[])
     int client_socket = -1;
     try
     {
-        if (argc > 2)
-            throw std::runtime_error("Usage: kv_benchmark [port]");
-        const std::string text = argc == 2 ? argv[1] : "6380";
+        if (argc > 3)
+            throw std::runtime_error("Usage: kv_benchmark [port] [GET|SET|VERIFY]");
+        const std::string text = argc >= 2 ? argv[1] : "6380";
+        const std::string workload = argc == 3 ? argv[2] : "GET";
+        if (workload != "GET" && workload != "SET" && workload != "VERIFY")
+            throw std::runtime_error("Workload must be GET, SET, or VERIFY");
         if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
             throw std::runtime_error("Port must be an integer from 1 to 65535");
         const unsigned long port = std::stoul(text);
@@ -188,7 +216,14 @@ int main(int argc, char *argv[])
         if (client_socket == -1)
             fail("socket");
         connect_to_server(client_socket, static_cast<unsigned short>(port));
-        benchmark(client_socket);
+        if (workload == "VERIFY")
+        {
+            std::string pending;
+            verify_set_values(client_socket, pending);
+            std::cout << "Verified final SET values for " << key_count << " keys (read-only).\n";
+        }
+        else
+            benchmark(client_socket, workload);
         ::close(client_socket);
         return 0;
     }
