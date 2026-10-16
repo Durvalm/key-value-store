@@ -55,3 +55,13 @@ not claims that every topic is mastered.
 ## Still to Learn
 
 Measuring contention and actual bottlenecks; asynchronous I/O; replication ordering; consistency across multiple processes and machines.
+
+## Distributed Systems
+
+- CAP Theorem
+- CA is impossible to happen because network partitions will always be a thing, so we need to choose between AP or CP
+- For consistency, we can choose strong consistencym which would block any writes if data is not consistent throughout all nodes, or we can choose eventual-consistency, which is lazily updates all nodes.
+
+- Inconsistency Resolution: Versioning. Let's say server 1 and server 2 update the key 'name' at the same time. We can have a vector clock in which keeps track of which version precedes, succeeds, or in conflict.
+
+- Coordinator Node

@@ -30,6 +30,7 @@ add_executable(kv_cli
 
 add_executable(kv_server
     src/server_main.cpp
+    src/replica_connection.cpp
 )
 
 add_executable(kv_client
@@ -86,6 +87,14 @@ if(BUILD_TESTING)
     set_tests_properties(kv_server_integration_tests PROPERTIES
         TIMEOUT 30
     )
+
+    add_test(
+        NAME kv_replication_tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/kv_replication_test.py
+            $<TARGET_FILE:kv_server>
+    )
+    set_tests_properties(kv_replication_tests PROPERTIES TIMEOUT 30)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
