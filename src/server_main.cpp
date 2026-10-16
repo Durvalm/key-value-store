@@ -1,5 +1,6 @@
 #include "command_processor.h"
 #include "key_value_store.h"
+#include "replica_connection.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -16,6 +17,7 @@
 #include <cstdlib>
 #include <cstddef>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -27,6 +29,7 @@
 namespace
 {
     constexpr std::uint16_t default_server_port = 6380;
+    constexpr std::uint16_t default_replica_port = 6381;
     constexpr unsigned int default_idle_timeout_seconds = 120;
     constexpr unsigned int max_idle_timeout_seconds = 3600;
     constexpr std::size_t worker_count = 2;
@@ -144,7 +147,10 @@ namespace
         return true;
     }
 
-    void handle_client(int client_socket, KeyValueStore &store, unsigned int idle_timeout_seconds)
+    void handle_client(int client_socket, KeyValueStore &store, unsigned int idle_timeout_seconds,
+                       const std::string &role, int replica_socket,
+                       std::mutex &replication_mutex, bool &replica_failed,
+                       bool &replica_session_used)
     {
 
         timeval io_timeout{};
@@ -174,6 +180,7 @@ namespace
 
         std::string pending_data;
         bool client_connected = true;
+        bool peer_connection = false;
 
         while (client_connected)
         {
@@ -224,8 +231,57 @@ namespace
                 // Remove the request and its newline from pending_data.
                 pending_data.erase(0, newline_position + 1);
 
-                const CommandResult result =
-                    process_command(request, store);
+                if (role == "replica" && !peer_connection && request == "REPLICA")
+                {
+                    // Only one fresh session is supported until numbered catch-up exists.
+                    std::lock_guard<std::mutex> lock(replication_mutex);
+                    if (replica_session_used)
+                    {
+                        send_all(client_socket, "ERROR SESSION_REJECTED \"Replica requires a fresh log and session\"\n");
+                        return;
+                    }
+                    replica_session_used = true;
+                    peer_connection = true;
+                    if (!send_all(client_socket, "READY\n"))
+                        return;
+                    continue;
+                }
+
+                CommandResult result;
+                if (role == "primary")
+                {
+                    // One order for local application, sending, and acknowledgment.
+                    // Socket-only locking would still allow local/remote order to differ.
+                    std::lock_guard<std::mutex> lock(replication_mutex);
+                    result = process_command(request, store, replica_failed, false);
+                    if (replica_failed && result.response.starts_with("ERROR READ_ONLY"))
+                        result.response = "ERROR REPLICA_UNAVAILABLE \"Replication failed; further writes are disabled\"\n";
+
+                    if (result.mutation_applied)
+                    {
+                        try
+                        {
+                            send_to_replica(replica_socket, request, result.response);
+                        }
+                        catch (const std::exception &error)
+                        {
+                            replica_failed = true;
+                            ::shutdown(replica_socket, SHUT_RDWR);
+                            std::cerr << "Replication failed: " << error.what() << '\n';
+                            result.response = "ERROR REPLICATION_UNCERTAIN \"Write applied locally; replica acknowledgment is unconfirmed\"\n";
+                        }
+                    }
+                    // A persistence failure may have left partial history. Do not
+                    // continue admitting writes after it in this experiment.
+                    if (result.response.starts_with("ERROR INTERNAL"))
+                        replica_failed = true;
+                }
+                else
+                {
+                    result = process_command(request, store,
+                                             role == "replica" && !peer_connection,
+                                             role == "standalone");
+                }
 
                 if (!send_all(client_socket, result.response))
                 {
@@ -251,9 +307,14 @@ namespace
     int run_server(
         const std::string &file_path,
         std::uint16_t port,
-        unsigned int idle_timeout_seconds)
+        unsigned int idle_timeout_seconds,
+        const std::string &role,
+        std::uint16_t replica_port)
     {
         KeyValueStore store(file_path);
+        const bool existing_history = std::filesystem::file_size(file_path) != 0;
+        if (role == "primary" && existing_history)
+            throw std::runtime_error("This first replication experiment requires a fresh primary log; use standalone to read existing logs");
 
         const int listening_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
@@ -303,6 +364,23 @@ namespace
 
         std::cout << "Listening on 127.0.0.1:" << port << '\n';
 
+        // Only the primary opens an outgoing connection. It owns its lifetime.
+        int replica_socket = -1;
+        if (role == "primary")
+        {
+            try
+            {
+                replica_socket = connect_to_replica(replica_port);
+                std::cout << "Connected to replica on 127.0.0.1:" << replica_port << '\n';
+            }
+            catch (...)
+            {
+                ::close(listening_socket);
+                throw;
+            }
+        }
+
+        // start the workers
         std::vector<std::thread> workers;
         int exit_status = EXIT_SUCCESS;
 
@@ -312,12 +390,16 @@ namespace
         bool workers_stopping = false;
         std::array<int, worker_count> active_client_sockets{};
         active_client_sockets.fill(-1);
+        std::mutex replication_mutex;
+        bool replica_failed = false;
+        bool replica_session_used = existing_history;
 
         // Workers share the queue but own one active client socket at a time.
         auto worker_task = [&pending_client_sockets, &connection_state_mutex,
                             &queue_condition, &workers_stopping,
                             &active_client_sockets, &store,
-                            idle_timeout_seconds](std::size_t worker_index)
+                            &replication_mutex, &replica_failed, &replica_session_used,
+                            &role, idle_timeout_seconds, replica_socket](std::size_t worker_index)
         {
             while (true)
             {
@@ -337,7 +419,8 @@ namespace
                 }
                 try
                 {
-                    handle_client(client_socket, store, idle_timeout_seconds);
+                    handle_client(client_socket, store, idle_timeout_seconds, role, replica_socket,
+                                  replication_mutex, replica_failed, replica_session_used);
                 }
                 catch (const std::exception &error)
                 {
@@ -367,6 +450,8 @@ namespace
         if (mask_error != 0)
         {
             std::cerr << "Could not block shutdown signals: " << mask_error << '\n';
+            if (replica_socket != -1)
+                ::close(replica_socket);
             ::close(listening_socket);
             return EXIT_FAILURE;
         }
@@ -407,6 +492,8 @@ namespace
             }
 
             ::close(listening_socket);
+            if (replica_socket != -1)
+                ::close(replica_socket);
             return EXIT_FAILURE;
         }
 
@@ -462,6 +549,9 @@ namespace
         }
 
         ::close(listening_socket);
+        // Interrupt an ACK wait before joining; workers never close this socket.
+        if (replica_socket != -1)
+            ::shutdown(replica_socket, SHUT_RDWR);
         {
             std::lock_guard<std::mutex> lock(connection_state_mutex);
             workers_stopping = true;
@@ -487,6 +577,8 @@ namespace
             worker.join();
         }
 
+        if (replica_socket != -1)
+            ::close(replica_socket);
         std::cout << "Server shut down.\n";
         return exit_status;
     }
@@ -494,9 +586,9 @@ namespace
 
 int main(int argc, char *argv[])
 {
-    if (argc > 4)
+    if (argc > 6)
     {
-        std::cerr << "Usage: kv_server [persistence-file] [port] [idle-timeout-seconds]\n";
+        std::cerr << "Usage: kv_server [persistence-file] [port] [idle-timeout-seconds] [standalone|primary|replica] [replica-port]\n";
         return EXIT_FAILURE;
     }
 
@@ -505,6 +597,18 @@ int main(int argc, char *argv[])
 
     std::uint16_t port = default_server_port;
     unsigned int idle_timeout_seconds = default_idle_timeout_seconds;
+    const std::string role = argc >= 5 ? argv[4] : "standalone";
+    std::uint16_t replica_port = default_replica_port;
+    if (role != "standalone" && role != "primary" && role != "replica")
+    {
+        std::cerr << "Invalid role: expected standalone, primary, or replica.\n";
+        return EXIT_FAILURE;
+    }
+    if (argc == 6 && (role != "primary" || !parse_port(argv[5], replica_port)))
+    {
+        std::cerr << "Replica port requires primary role and a port from 1 to 65535.\n";
+        return EXIT_FAILURE;
+    }
 
     if (argc >= 3 && !parse_port(argv[2], port))
     {
@@ -512,10 +616,16 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (argc == 4 && !parse_idle_timeout(argv[3], idle_timeout_seconds))
+    if (argc >= 4 && !parse_idle_timeout(argv[3], idle_timeout_seconds))
     {
         std::cerr << "Invalid idle timeout: expected an integer from 1 to "
                   << max_idle_timeout_seconds << " seconds.\n";
+        return EXIT_FAILURE;
+    }
+
+    if (role == "primary" && port == replica_port)
+    {
+        std::cerr << "Primary and replica must listen on different ports.\n";
         return EXIT_FAILURE;
     }
 
@@ -527,7 +637,8 @@ int main(int argc, char *argv[])
 
     try
     {
-        return run_server(file_path, port, idle_timeout_seconds);
+
+        return run_server(file_path, port, idle_timeout_seconds, role, replica_port);
     }
     catch (const std::exception &error)
     {

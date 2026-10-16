@@ -72,6 +72,14 @@ Measure and improve the system using:
 
 ### 6. Replication
 
+The [first-session walkthrough](docs/replication-first-session.md) explains the
+implemented primary/replica forwarding experiment and how to run it with fresh logs.
+
+See [Replication Requirements](docs/replication-requirements.md) for the concepts,
+small implementation checkpoints, acknowledgment rules, and recovery tests.
+Start with one primary and one replica; configurable acknowledgment and failover
+are later extensions.
+
 Introduce multiple database nodes with:
 
 - Primary-replica replication

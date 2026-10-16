@@ -16,9 +16,15 @@ def choose_port():
         return probe.getsockname()[1]
 
 
-def start_server(executable, database_path, port, idle_timeout=1):
+def start_server(executable, database_path, port, idle_timeout=1,
+                 role="standalone", replica_port=None):
+    arguments = [str(executable), str(database_path), str(port), str(idle_timeout)]
+    if role != "standalone" or replica_port is not None:
+        arguments.append(role)
+    if replica_port is not None:
+        arguments.append(str(replica_port))
     process = subprocess.Popen(
-        [str(executable), str(database_path), str(port), str(idle_timeout)],
+        arguments,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

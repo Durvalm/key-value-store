@@ -46,7 +46,8 @@ CommandResult request_too_large_result()
     return error_result("REQUEST_TOO_LARGE", "Request exceeds 4096 bytes");
 }
 
-CommandResult process_command(const std::string &line, KeyValueStore &store)
+CommandResult process_command(const std::string &line, KeyValueStore &store,
+                              bool read_only, bool allow_compaction)
 {
     if (line.size() > max_request_size)
     {
@@ -86,8 +87,11 @@ CommandResult process_command(const std::string &line, KeyValueStore &store)
                     "Usage: SET \"<key>\" \"<value>\"");
             }
 
+            if (read_only)
+                return error_result("READ_ONLY", "Client writes are disabled on this connection");
+
             store.set(key, value);
-            return {"OK\n", false};
+            return {"OK\n", false, true};
         }
         else if (command == "GET")
         {
@@ -110,8 +114,11 @@ CommandResult process_command(const std::string &line, KeyValueStore &store)
                 return error_result("INVALID_ARGUMENT", "Usage: DELETE \"<key>\"");
             }
 
+            if (read_only)
+                return error_result("READ_ONLY", "Client writes are disabled on this connection");
+
             const bool removed = store.remove(key);
-            return {removed ? "INTEGER 1\n" : "INTEGER 0\n", false};
+            return {removed ? "INTEGER 1\n" : "INTEGER 0\n", false, removed};
         }
         else if (command == "SIZE")
         {
@@ -159,6 +166,9 @@ CommandResult process_command(const std::string &line, KeyValueStore &store)
             {
                 return error_result("INVALID_ARGUMENT", "Usage: COMPACT");
             }
+
+            if (!allow_compaction)
+                return error_result("COMPACTION_DISABLED", "Compaction is disabled during replication experiments");
 
             store.compact();
             return {"OK\n", false};
