@@ -79,6 +79,9 @@ verifies retained records and catches up the replica before serving primary clie
 requests. Manual process restart is supported; automatic reconnect and failover
 remain later extensions.
 
+See [Replication Results](docs/replication-results.md) for recovery/failure
+examples and the measured standalone versus synchronous replication comparison.
+
 See [Replication Requirements](docs/replication-requirements.md) for the concepts,
 small implementation checkpoints, acknowledgment rules, and recovery tests.
 Start with one primary and one replica; configurable acknowledgment and failover

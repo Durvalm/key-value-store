@@ -283,6 +283,7 @@ Restarting without the test limit must catch up the saved prefix and resume
 numbering without duplicates. This exercises a real failed append/flush with no
 remaining file space; it does not simulate every partial-write or hardware failure.
 
-Remaining Phase 6 work includes broader failure validation and a short results
-report with recovery transcripts and a standalone/replicated latency comparison.
-Automatic reconnect and failover remain separate extensions.
+The [results report](replication-results.md) records recovery/failure examples,
+the measured standalone/replicated latency comparison, and current limitations.
+Broader failure validation can be added for specific new questions. Automatic
+reconnect and failover remain separate extensions.
