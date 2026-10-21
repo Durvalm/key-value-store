@@ -553,6 +553,91 @@ namespace
             "HELP returns one framed protocol response");
         expect(!help_result.close_requested, "HELP keeps the connection open");
     }
+    void test_numbered_history()
+    {
+        const auto path = test_file("numbered");
+        std::filesystem::remove(path);
+        {
+            KeyValueStore store(path.string(), true);
+            expect(store.last_sequence() == 0, "fresh numbered history starts at zero");
+            store.set("color", "blue");
+            store.set("color", "red");
+            expect(!store.remove("missing"), "missing delete is not numbered");
+            expect(store.last_sequence() == 2, "only actual mutations advance progress");
+            expect(read_file(path) == "1 SET \"color\" \"blue\"\n2 SET \"color\" \"red\"\n",
+                   "numbers are persisted with their mutations");
+            expect_runtime_error([&]() { store.compact(); }, "numbered history cannot be compacted");
+        }
+        {
+            KeyValueStore store(path.string(), true);
+            expect(store.last_sequence() == 2, "restart recovers progress");
+            expect(store.get("color") == "red", "restart recovers data");
+            expect(store.apply_replica_record("1 SET \"color\" \"blue\"") == 1,
+                   "old matching resend is acknowledged");
+            expect(store.get("color") == "red", "old resend cannot undo newer state");
+            expect(store.last_sequence() == 2 && count_records(read_file(path)) == 2,
+                   "resend does not change progress or append again");
+            expect_runtime_error([&]() { store.apply_replica_record("2 SET \"color\" \"wrong\""); },
+                                 "conflicting resend is rejected");
+            expect_runtime_error([&]() { store.apply_replica_record("4 SET \"color\" \"gap\""); },
+                                 "gap is rejected");
+            expect_runtime_error([&]() { store.apply_replica_record("3 DELETE \"absent\""); },
+                                 "replicated missing delete indicates inconsistent state");
+            store.remove("color");
+            expect(store.last_sequence() == 3, "new writes continue numbering after restart");
+            expect(read_file(path).ends_with("3 DELETE \"color\"\n"), "delete persists its sequence");
+        }
+        {
+            KeyValueStore store(path.string(), true);
+            expect(store.last_sequence() == 3 && !store.contains("color"),
+                   "delete and progress survive restart");
+            expect(store.apply_replica_record("4 SET \"full name\" \"Durval \\\"D\\\"\"") == 4,
+                   "numbered parser handles quoted fields");
+        }
+        expect_runtime_error([&]() { KeyValueStore store(path.string()); },
+                             "standalone rejects numbered history rather than mixing formats");
+        std::filesystem::remove(path);
+    }
+
+    void test_invalid_numbered_history()
+    {
+        const auto path = test_file("invalid_numbered");
+        for (const std::string record : {
+                 "SET \"k\" \"legacy\"\n", "0 SET \"k\" \"v\"\n",
+                 "-1 SET \"k\" \"v\"\n", "+1 SET \"k\" \"v\"\n",
+                 "18446744073709551616 SET \"k\" \"v\"\n",
+                 "2 SET \"k\" \"gap\"\n", "1 GET \"k\"\n", "\n",
+                 "1 SET \"k\" \"v\"\n1 SET \"k\" \"v\"\n",
+                 "1 SET \"k\" \"v\"\n2 SET \"k\" \"partial\""})
+        {
+            write_file(path, record);
+            expect_runtime_error([&]() { KeyValueStore store(path.string(), true); },
+                                 "invalid/incompatible/incomplete numbered history is rejected");
+            expect(read_file(path) == record, "failed recovery leaves original bytes unchanged");
+        }
+        std::filesystem::remove(path);
+    }
+
+    void test_concurrent_numbered_history()
+    {
+        const auto path = test_file("concurrent_numbered");
+        std::filesystem::remove(path);
+        {
+            KeyValueStore store(path.string(), true);
+            auto write = [&]()
+            {
+                for (int i = 0; i < 100; ++i)
+                    store.set("shared", std::to_string(i));
+            };
+            run_concurrently(write, write);
+            expect(store.last_sequence() == 200, "concurrent mutations have consecutive numbers");
+        }
+        {
+            KeyValueStore store(path.string(), true);
+            expect(store.last_sequence() == 200, "concurrent numbered log replays without gaps");
+        }
+        std::filesystem::remove(path);
+    }
 } // namespace
 
 void test_contains()
@@ -570,6 +655,9 @@ void test_contains()
 
 int main()
 {
+    test_numbered_history();
+    test_invalid_numbered_history();
+    test_concurrent_numbered_history();
     test_concurrent_distinct_keys();
     test_concurrent_delete();
     test_concurrent_persistence();

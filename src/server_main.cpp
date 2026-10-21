@@ -248,7 +248,23 @@ namespace
                 }
 
                 CommandResult result;
-                if (role == "primary")
+                if (peer_connection)
+                {
+                    try
+                    {
+                        // A peer sends numbered mutations, not ordinary client commands.
+                        if (request.size() > max_request_size + 21)
+                            throw std::runtime_error("Replication record exceeds limit");
+                        const auto sequence = store.apply_replica_record(request);
+                        result = {"ACK " + std::to_string(sequence) + '\n', false};
+                    }
+                    catch (const std::exception &error)
+                    {
+                        std::cerr << "Replica rejected record: " << error.what() << '\n';
+                        result = {"ERROR REPLICATION_RECORD\n", true};
+                    }
+                }
+                else if (role == "primary")
                 {
                     // One order for local application, sending, and acknowledgment.
                     // Socket-only locking would still allow local/remote order to differ.
@@ -261,7 +277,10 @@ namespace
                     {
                         try
                         {
-                            send_to_replica(replica_socket, request, result.response);
+                            const auto sequence = store.last_sequence();
+                            send_to_replica(replica_socket,
+                                            std::to_string(sequence) + ' ' + request,
+                                            "ACK " + std::to_string(sequence) + '\n');
                         }
                         catch (const std::exception &error)
                         {
@@ -296,7 +315,9 @@ namespace
                 }
             }
 
-            if (client_connected && pending_data.size() > max_request_size)
+            // A uint64 sequence plus its separating space adds at most 21 bytes.
+            const auto frame_limit = max_request_size + (peer_connection ? 21 : 0);
+            if (client_connected && pending_data.size() > frame_limit)
             {
                 send_all(client_socket, request_too_large_result().response);
                 client_connected = false;
@@ -311,10 +332,10 @@ namespace
         const std::string &role,
         std::uint16_t replica_port)
     {
-        KeyValueStore store(file_path);
+        KeyValueStore store(file_path, role != "standalone");
         const bool existing_history = std::filesystem::file_size(file_path) != 0;
         if (role == "primary" && existing_history)
-            throw std::runtime_error("This first replication experiment requires a fresh primary log; use standalone to read existing logs");
+            throw std::runtime_error("This replication experiment requires a fresh primary log; use replica mode to read existing numbered logs");
 
         const int listening_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 

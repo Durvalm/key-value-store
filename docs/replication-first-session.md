@@ -2,8 +2,9 @@
 
 This is the next small implementation step: a primary forwards successful
 mutations over one persistent connection and checks the receiver's reply before
-returning success to the client. It is a fresh-session experiment, not the full
-[replication requirements](replication-requirements.md). Numbered history,
+returning success to the client. Mutations now have persistent sequence numbers
+and numbered acknowledgments. It is still a fresh-session experiment, not the full
+[replication requirements](replication-requirements.md): history identity,
 reconnection, and catch-up are not implemented yet.
 
 ## Run it
@@ -86,10 +87,14 @@ primary and replica ports and separate log files.
    `process_command()` sets it after SET succeeds, or when DELETE removes a key.
    The primary forwards only those results. Reads, invalid commands, and missing
    DELETEs do not trigger replication.
-4. **Send and acknowledge:** `send_to_replica()` adds the framing newline, handles
-   partial sends, receives through a newline, and validates the expected reply.
-   SET expects `OK\n`; successful DELETE expects `INTEGER 1\n`. Those replies
-   follow receiver log append/flush checks and map application.
+4. **Send and acknowledge:** the store assigns consecutive numbers while holding
+   its mutex and persists each number with its mutation. The primary sends, for
+   example, `7 SET "color" "blue"\n` and expects `ACK 7\n`. Both logs use the same
+   numbered format. `send_to_replica()` adds the framing newline and uses
+   `exchange_message()` to send fully, receive a line, and check the ACK. The
+   replica's `apply_replica_record()` validates order, appends/flushes, and applies
+   the mutation before the handler sends its ACK. The primary then sends the
+   ordinary `OK\n` or `INTEGER 1\n` to its application client.
 5. **Write order:** the primary's `replication_mutex` covers command execution and
    the complete peer exchange. Two workers cannot apply writes in one order and
    send them in another, or consume each other's replies. This simple choice also
@@ -108,7 +113,7 @@ worker coordination are in `server_main.cpp`. No new networking class is needed.
 
 ## Why fresh logs and one session?
 
-We do not yet have sequence numbers or a catch-up protocol. Silently reconnecting
+We have sequence numbers, but not history identity or a catch-up protocol. Silently reconnecting
 to arbitrary existing data could leave the maps different while new SETs appear
 to succeed. This stage therefore refuses a primary with existing log contents
 and refuses a replica peer session if the replica has existing history or has
@@ -131,10 +136,36 @@ To check normal restart recovery without attempting a new replication session:
 2. In terminal 1, restart the replica using **the same** `$replica_log` command.
 3. Connect a client and GET `color`; it should still be `blue`.
 
-The restarted replica can serve existing reads, but rejects a new peer session
-until numbered recovery is implemented. To inspect the primary log after restart,
-open that same log in `standalone` mode. Do not create a new temporary path for
-these recovery checks. Stop servers before deleting their test logs.
+The restarted replica replays both the map and sequence position, but rejects a
+new peer session until catch-up is implemented. To inspect the primary log after
+restart, stop both servers and open the primary's log in `replica` mode on a free
+port for read-only access. `standalone` uses the old unnumbered format and cannot
+open a numbered log. Do not create a new temporary path for recovery checks.
+Stop servers before deleting their test logs.
+
+## Numbered records: what is implemented
+
+Client syntax is unchanged: `SET "color" "blue"`, without a number. Only actual
+mutations consume a sequence number; reads and missing DELETEs do not. There is
+no `REPL` prefix: the established peer session determines how to parse the line.
+
+`KeyValueStore(file_path, true)` enables numbered history for primary and replica.
+`append_record()` writes the number and command as one record. Local replay
+requires consecutive numbers beginning at 1 and reconstructs `last_sequence()`.
+It does not append those records again. The retained records also let the replica
+verify an old resend: identical mutation means ACK without reapplying or logging;
+different contents mean rejection. Gaps, malformed records, and replicated DELETEs
+of absent keys are rejected. Peer protocol errors close that connection.
+
+Use fresh replication logs after this format change. Legacy unnumbered logs are
+not migrated; they remain usable in standalone mode. A numbered log with an
+incomplete final record is refused rather than silently appending after broken
+bytes. Persistence/application failures disable further store mutations.
+
+We retain the whole numbered history in memory for simple duplicate checks. No
+log index, snapshot, pruning, or generic protocol framework is needed for this
+small experiment. Stable history identity remains required before supporting
+connections to existing histories; a matching sequence alone is insufficient.
 
 ## Checks and the next learning step
 
@@ -144,13 +175,15 @@ Run:
 ctest --test-dir build-release --output-on-failure
 ```
 
-The new replication tests check live SET/overwrite/DELETE, ordinary replica
+The replication tests check live SET/overwrite/DELETE, ordinary replica
 read-only behavior, non-mutation filtering, identical log order with two writers,
 restart reads, existing-history rejection, fragmented/wrong/lost/timed-out ACKs,
-and shutdown during a peer wait. Existing standalone storage/network suites also
-pass.
+and shutdown during a peer wait. They also check numbered ACKs, duplicate/conflicting
+resends, gaps, fragmented/batched records, and a full-size client command with its
+added sequence prefix. C++ tests check recovered progress, continued numbering,
+concurrent numbering, incompatible logs, and incomplete numbered tails. Existing
+standalone storage/network suites remain in place.
 
-Next, replace the fresh-session restriction with numbered, persistent replication
-history and ACKs. Only then add duplicate detection and reconnect/catch-up, following
-Steps 3–4 of the requirements. This implementation establishes live forwarding;
-it does not complete those recovery guarantees.
+Next, add a persistent history identity, then reconnect/catch-up, following
+Steps 3–4 of the requirements. This checkpoint recovers sequence progress locally;
+it does not yet resume replication between restarted processes.

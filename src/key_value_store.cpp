@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <filesystem>
+#include <charconv>
 
 // Helper functions
 namespace
@@ -35,11 +36,54 @@ namespace
         input >> std::ws;
         return input.eof();
     }
+
+    std::uint64_t read_sequence(std::istringstream &input)
+    {
+        std::string text;
+        input >> text;
+        std::uint64_t sequence = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), sequence);
+        if (error != std::errc{} || end != text.data() + text.size() || sequence == 0)
+            throw std::runtime_error("Expected a positive sequence number in numbered history");
+        return sequence;
+    }
+
+    struct Mutation
+    {
+        std::string operation;
+        std::string key;
+        std::string value;
+    };
+
+    Mutation read_mutation(std::istringstream &input)
+    {
+        Mutation mutation;
+        input >> mutation.operation;
+        if ((mutation.operation != "SET" && mutation.operation != "DELETE") ||
+            !read_quoted(input, mutation.key) || mutation.key.empty() ||
+            (mutation.operation == "SET" &&
+             (!read_quoted(input, mutation.value) || mutation.value.empty())) ||
+            !reached_end(input))
+            throw std::runtime_error("Malformed mutation record");
+        validate_field(mutation.key, "Key");
+        if (mutation.operation == "SET")
+            validate_field(mutation.value, "Value");
+        return mutation;
+    }
+
+    std::string mutation_command(const Mutation &mutation)
+    {
+        std::ostringstream command;
+        command << mutation.operation << ' ' << std::quoted(mutation.key);
+        if (mutation.operation == "SET")
+            command << ' ' << std::quoted(mutation.value);
+        return command.str();
+    }
 }
 
 // Construtor
-KeyValueStore::KeyValueStore(const std::string &file_path)
-    : file_path_(file_path)
+KeyValueStore::KeyValueStore(const std::string &file_path, bool numbered_history)
+    : file_path_(file_path), numbered_history_(numbered_history)
 {
     replay();
     open_log();
@@ -58,9 +102,16 @@ void KeyValueStore::set(
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    append_record(record.str());
-
-    data_[key] = value;
+    try
+    {
+        append_record(record.str());
+        data_[key] = value;
+    }
+    catch (...)
+    {
+        write_failed_ = true;
+        throw;
+    }
 }
 
 std::optional<std::string> KeyValueStore::get(
@@ -83,6 +134,9 @@ bool KeyValueStore::remove(
 
     std::lock_guard<std::mutex> lock(mutex_);
 
+    if (write_failed_)
+        throw std::runtime_error("Writes disabled after persistence/application failure");
+
     if (!data_.contains(key))
     {
         return false;
@@ -91,7 +145,15 @@ bool KeyValueStore::remove(
     std::ostringstream record;
     record << "DELETE " << std::quoted(key);
 
-    append_record(record.str());
+    try
+    {
+        append_record(record.str());
+    }
+    catch (...)
+    {
+        write_failed_ = true;
+        throw;
+    }
 
     return data_.erase(key) > 0;
 }
@@ -106,13 +168,18 @@ void KeyValueStore::open_log()
 
 void KeyValueStore::append_record(const std::string &record)
 {
+    if (write_failed_)
+        throw std::runtime_error("Writes disabled after persistence/application failure");
+
     if (file_path_.empty())
         return;
 
     if (!log_file_.is_open())
         throw std::runtime_error("Persistence file is not open");
 
-    log_file_ << record << '\n';
+    const std::string persisted = numbered_history_
+        ? std::to_string(history_.size() + 1) + ' ' + record : record;
+    log_file_ << persisted << '\n';
 
     if (!log_file_)
         throw std::runtime_error("Could not write persistence record");
@@ -121,6 +188,61 @@ void KeyValueStore::append_record(const std::string &record)
 
     if (!log_file_)
         throw std::runtime_error("Could not flush persistence record");
+
+    if (numbered_history_)
+        history_.push_back(persisted);
+}
+
+std::uint64_t KeyValueStore::last_sequence() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return history_.size();
+}
+
+std::uint64_t KeyValueStore::apply_replica_record(const std::string &record)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!numbered_history_ || write_failed_)
+        throw std::runtime_error("Numbered replica history is not writable");
+    if (record.find_first_of("\r\n") != std::string::npos)
+        throw std::runtime_error("Replication record must contain exactly one line");
+
+    std::istringstream input(record);
+    const std::uint64_t sequence = read_sequence(input);
+    std::string command_text;
+    std::getline(input >> std::ws, command_text);
+    if (command_text.size() > 4096)
+        throw std::runtime_error("Replicated command exceeds 4096 bytes");
+    std::istringstream command_input(command_text);
+    const Mutation mutation = read_mutation(command_input);
+    const std::string command = mutation_command(mutation);
+    const std::string canonical = std::to_string(sequence) + ' ' + command;
+
+    if (sequence <= history_.size())
+    {
+        if (history_[sequence - 1] != canonical)
+            throw std::runtime_error("Conflicting replication resend");
+        return sequence; // Already applied: ACK without changing data or the log.
+    }
+    if (sequence != history_.size() + 1)
+        throw std::runtime_error("Gap in replication sequence");
+    if (mutation.operation == "DELETE" && !data_.contains(mutation.key))
+        throw std::runtime_error("Replicated DELETE must remove an existing key");
+
+    try
+    {
+        append_record(command);
+        if (mutation.operation == "SET")
+            data_[mutation.key] = mutation.value;
+        else
+            data_.erase(mutation.key);
+    }
+    catch (...)
+    {
+        write_failed_ = true;
+        throw;
+    }
+    return sequence;
 }
 
 std::size_t
@@ -139,6 +261,8 @@ bool KeyValueStore::contains(
 
 void KeyValueStore::compact()
 {
+    if (numbered_history_)
+        throw std::runtime_error("Cannot compact numbered replication history");
     if (file_path_.empty())
     {
         return;
@@ -219,50 +343,36 @@ void KeyValueStore::replay()
         ++line_number;
         if (log_file.eof())
         {
+            if (numbered_history_)
+                throw std::runtime_error("Incomplete numbered history tail; repair before restarting");
             std::cerr << "Warning: ignoring incomplete final record at line "
                       << line_number << '\n';
             break;
         }
 
-        if (record.empty())
+        if (record.empty() && !numbered_history_)
             continue;
 
-        // parse this record and apply it directly to data_.
-        std::string operation;
-        std::string key;
-        std::string value;
-
         std::istringstream input(record);
-
-        input >> operation;
-
-        if (operation == "SET")
+        try
         {
-            if (!read_quoted(input, key) ||
-                !read_quoted(input, value) ||
-                !reached_end(input) ||
-                key.empty() ||
-                value.empty())
+            if (numbered_history_ && read_sequence(input) != history_.size() + 1)
+                throw std::runtime_error("Nonconsecutive numbered history");
+            const Mutation mutation = read_mutation(input);
+            if (mutation.operation == "SET")
+                data_[mutation.key] = mutation.value;
+            else
             {
-                throw std::runtime_error(
-                    "Malformed SET at line " + std::to_string(line_number));
+                if (numbered_history_ && !data_.contains(mutation.key))
+                    throw std::runtime_error("Numbered DELETE has no matching key");
+                data_.erase(mutation.key);
             }
-            data_[key] = value;
+            if (numbered_history_)
+                history_.push_back(std::to_string(history_.size() + 1) + ' ' + mutation_command(mutation));
         }
-        else if (operation == "DELETE")
+        catch (const std::exception &error)
         {
-            if (!read_quoted(input, key) ||
-                !reached_end(input) ||
-                key.empty())
-            {
-                throw std::runtime_error(
-                    "Malformed DELETE at line " + std::to_string(line_number));
-            }
-            data_.erase(key);
-        }
-        else
-        {
-            throw std::runtime_error("Unknown operation: " + operation);
+            throw std::runtime_error("Invalid history at line " + std::to_string(line_number) + ": " + error.what());
         }
     }
 

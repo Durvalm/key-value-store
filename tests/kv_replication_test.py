@@ -1,4 +1,4 @@
-"""First-session forwarding tests; numbered replay/catch-up is not implemented."""
+"""Numbered live replication tests; reconnect/catch-up is not implemented."""
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -63,6 +63,7 @@ def test_pair(executable, directory):
                 task.result(timeout=10)
         assert primary_log.read_bytes() == replica_log.read_bytes()
         assert len(primary_log.read_text().splitlines()) == 103
+        assert [int(line.split()[0]) for line in primary_log.read_text().splitlines()] == list(range(1, 104))
         expected = request(primary_port, b'GET "shared"')
         assert request(replica_port, b'GET "shared"') == expected
 
@@ -110,14 +111,14 @@ def test_peer_failure(executable, directory, behavior):
                 with connection, connection.makefile("rb") as stream:
                     assert stream.readline() == b"REPLICA\n"
                     connection.sendall(b"READY\n")
-                    assert stream.readline() == b'SET "key" "local"\n'
+                    assert stream.readline() == b'1 SET "key" "local"\n'
                     received.set()
                     if behavior == "fragmented":
-                        connection.sendall(b"O")
-                        connection.sendall(b"K\n")
+                        connection.sendall(b"ACK ")
+                        connection.sendall(b"1\n")
                         assert stream.readline() == b""
                     elif behavior == "wrong":
-                        connection.sendall(b"NOT_FOUND\n")
+                        connection.sendall(b"ACK 2\n")
                     elif behavior in ("shutdown", "timeout"):
                         assert release.wait(10)
                     # "lost" closes without sending an ACK.
@@ -156,14 +157,83 @@ def test_peer_failure(executable, directory, behavior):
             raise peer_errors[0]
 
 
+def test_numbered_peer(executable, directory):
+    port = choose_port()
+    log = directory / "numbered-peer.log"
+    replica = start_server(executable, log, port, 30, "replica")
+    try:
+        with open_client(port) as client, client.makefile("rb") as stream:
+            client.sendall(b"REPLICA\n")
+            assert stream.readline() == b"READY\n"
+            # Fragmented input, followed by multiple complete records in one send.
+            client.sendall(b'1 SET "color" ')
+            client.sendall(b'"blue"\n2 SET "color" "red"\n')
+            assert stream.readline() == b"ACK 1\n"
+            assert stream.readline() == b"ACK 2\n"
+            before = log.read_bytes()
+            client.sendall(b'1 SET "color" "blue"\n')
+            assert stream.readline() == b"ACK 1\n"
+            assert log.read_bytes() == before
+            assert request(port, b'GET "color"') == b'VALUE "red"\n'
+            client.sendall(b'3 DELETE "color"\n')
+            assert stream.readline() == b"ACK 3\n"
+            client.sendall(b'3 DELETE "color"\n')
+            assert stream.readline() == b"ACK 3\n"
+            # An old conflicting record closes the peer without changing its history.
+            before = log.read_bytes()
+            client.sendall(b'2 SET "color" "wrong"\n')
+            assert stream.readline().startswith(b"ERROR REPLICATION_RECORD")
+            assert stream.readline() == b""
+            assert log.read_bytes() == before
+    finally:
+        stop_server(replica)
+
+    for index, record in enumerate((
+        b'2 SET "k" "gap"', b'0 SET "k" "zero"',
+        b'-1 SET "k" "negative"', b'18446744073709551616 SET "k" "overflow"',
+        b'1 GET "k"', b'1 SET k unquoted', b'1 DELETE "missing"',
+        b'1 SET "k" "' + b'x' * 4090 + b'"',
+    )):
+        log = directory / f"bad-peer-{index}.log"
+        replica = start_server(executable, log, port, 30, "replica")
+        try:
+            with open_client(port) as client, client.makefile("rb") as stream:
+                client.sendall(b"REPLICA\n")
+                assert stream.readline() == b"READY\n"
+                client.sendall(record + b"\n")
+                assert stream.readline().startswith(b"ERROR REPLICATION_RECORD")
+                assert log.read_bytes() == b""
+        finally:
+            stop_server(replica)
+
+
+def test_maximum_command(executable, directory):
+    primary_port, replica_port = distinct_ports()
+    replica = start_server(executable, directory / "max-replica.log", replica_port, 30, "replica")
+    primary = None
+    try:
+        primary = start_server(executable, directory / "max-primary.log", primary_port,
+                               30, "primary", replica_port)
+        command = b'SET "k" "' + b'x' * (4096 - len(b'SET "k" ""')) + b'"'
+        assert len(command) == 4096
+        assert request(primary_port, command) == b"OK\n"
+        assert request(replica_port, b'GET "k"') == b'VALUE "' + b'x' * 4086 + b'"\n'
+    finally:
+        if primary is not None:
+            stop_server(primary)
+        stop_server(replica)
+
+
 def main():
     executable = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix="kv_replication_test_") as temporary:
         directory = Path(temporary)
         test_pair(executable, directory)
+        test_numbered_peer(executable, directory)
+        test_maximum_command(executable, directory)
         for behavior in ("fragmented", "wrong", "lost", "timeout", "shutdown"):
             test_peer_failure(executable, directory, behavior)
-    print("All first-session replication tests passed.")
+    print("All numbered replication tests passed.")
 
 
 if __name__ == "__main__":

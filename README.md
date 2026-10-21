@@ -73,7 +73,9 @@ Measure and improve the system using:
 ### 6. Replication
 
 The [first-session walkthrough](docs/replication-first-session.md) explains the
-implemented primary/replica forwarding experiment and how to run it with fresh logs.
+implemented primary/replica experiment, numbered logs and ACKs, and how to run it
+with fresh logs. Restarted replicas can replay their state and sequence position;
+history identity and reconnect/catch-up remain the next checkpoints.
 
 See [Replication Requirements](docs/replication-requirements.md) for the concepts,
 small implementation checkpoints, acknowledgment rules, and recovery tests.
