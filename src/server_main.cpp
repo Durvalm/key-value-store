@@ -257,7 +257,7 @@ namespace
                         std::lock_guard<std::mutex> lock(replication_mutex);
                         if (replica_session_used)
                         {
-                            send_all(client_socket, "ERROR SESSION_REJECTED \"Replica requires a fresh log and session\"\n");
+                            send_all(client_socket, "ERROR SESSION_REJECTED \"Restart replica before opening another peer session\"\n");
                             return;
                         }
                         replica_session_used = true;
@@ -357,9 +357,6 @@ namespace
         const std::string &new_history_id)
     {
         KeyValueStore store(file_path, role != "standalone", new_history_id);
-        const bool existing_history = store.last_sequence() != 0;
-        if (role == "primary" && existing_history)
-            throw std::runtime_error("This replication experiment requires a fresh primary log; use replica mode to read existing numbered logs");
 
         const int listening_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
@@ -415,7 +412,7 @@ namespace
         {
             try
             {
-                replica_socket = connect_to_replica(replica_port, store.history_id(), store.last_sequence());
+                replica_socket = connect_to_replica(replica_port, store.history_id(), store.history_records());
                 std::cout << "Connected to replica on 127.0.0.1:" << replica_port << '\n';
             }
             catch (...)
@@ -437,7 +434,7 @@ namespace
         active_client_sockets.fill(-1);
         std::mutex replication_mutex;
         bool replica_failed = false;
-        bool replica_session_used = existing_history;
+        bool replica_session_used = false;
 
         // Workers share the queue but own one active client socket at a time.
         auto worker_task = [&pending_client_sockets, &connection_state_mutex,

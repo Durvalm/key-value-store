@@ -1,12 +1,13 @@
-# First live replication session
+# Live replication and startup recovery
 
-This is the next small implementation step: a primary forwards successful
-mutations over one persistent connection and checks the receiver's reply before
-returning success to the client. Mutations now have persistent sequence numbers
-and numbered acknowledgments. It is still a fresh-session experiment, not the full
-[replication requirements](replication-requirements.md): history identity and
-progress are checked during the handshake, but verification of existing record
-contents, reconnection, and catch-up are not implemented yet.
+A primary forwards mutations over one persistent connection and checks the
+replica's numbered acknowledgment before returning success to the client. Both
+nodes replay their own numbered logs on restart. Startup then verifies the
+replica's retained records and sends its missing mutations before the primary
+starts its client workers. Existing logs can now be reused.
+
+Automatic reconnect, history pruning, and failover remain outside this checkpoint;
+see the [replication requirements](replication-requirements.md).
 
 ## Run it
 
@@ -31,8 +32,9 @@ primary_log=$(mktemp)
 ./build-release/kv_server "$primary_log" 6380 120 primary 6381 --history-id experiment-a
 ```
 
-The primary should print `Connected to replica on 127.0.0.1:6381` after completing
-the peer handshake. Starting the replica does not connect it to itself.
+The primary prints the replica's reported sequence, verification/catch-up counts,
+and `Replica ready at sequence N` before printing
+`Connected to replica on 127.0.0.1:6381`. Starting the replica does not connect it to itself.
 
 Choose a new ID for each independent experiment and supply that same ID to both
 nodes. IDs contain 1–128 letters, digits, dots, underscores or hyphens. New numbered
@@ -40,7 +42,8 @@ logs require `--history-id`; reopening an existing header restores its ID withou
 the option. If supplied on reopen, the ID must match the saved one. The option
 must come last and is only for primary/replica roles. There is no automatic ID
 generation or automatic ID adoption. The replica rejects a different history ID,
-and the primary requires the reply to contain its expected ID and sequence.
+and the primary validates the reply's ID and actual sequence. A replica ahead of
+the primary is rejected rather than reset or overwritten.
 
 In terminal 3:
 
@@ -86,12 +89,14 @@ primary and replica ports and separate log files.
 
 1. **Connection and handshake:** `connect_to_replica()` creates/connects a socket,
    configures five-second per-call I/O timeouts, sends `REPLICA <history-id>\n`,
-   and requires exactly `READY <history-id> <last-sequence>\n` using the primary's
-   expected values. It receives these values as arguments, not the store itself.
-   On failure it closes its socket. On success `run_server()` owns the descriptor
-   and passes it to the workers. For fresh logs, the sequence is 0.
+   and parses `READY <history-id> <last-sequence>\n`. The ID must match; the
+   replica's progress may be behind or equal, but cannot be ahead. The primary
+   supplies its ID and a copy of its retained records, not the store object.
+   `exchange_message()` returns one response line; `send_to_replica()` separately
+   checks exact ACKs. On failure the connection function closes its socket. It
+   returns the owned descriptor to `run_server()` only after verification/catch-up.
 2. **Peer versus ordinary client:** the replica parses the ID, rejects missing or
-   extra arguments and different IDs, and permits only one fresh session. Rejected
+   extra arguments and different IDs, and permits only one peer session per process. Rejected
    handshakes do not consume that session. Its READY reply uses its own saved ID
    and progress. Only an accepted session can apply mutations. Ordinary replica client
    connections can read but cannot write. The marker distinguishes traffic;
@@ -104,7 +109,7 @@ primary and replica ports and separate log files.
    its mutex and persists each number with its mutation. The primary sends, for
    example, `7 SET "color" "blue"\n` and expects `ACK 7\n`. Both logs use the same
    numbered format. `send_to_replica()` adds the framing newline and uses
-   `exchange_message()` to send fully, receive a line, and check the ACK. The
+   `exchange_message()` to send fully and receive a line, then checks the ACK. The
    replica's `apply_replica_record()` validates order, appends/flushes, and applies
    the mutation before the handler sends its ACK. The primary then sends the
    ordinary `OK\n` or `INTEGER 1\n` to its application client.
@@ -124,40 +129,76 @@ The receiver uses the existing store: append/flush/check, apply memory, then rep
 The request/reply logic is in `replica_connection.cpp`; connection lifetime and
 worker coordination are in `server_main.cpp`. No new networking class is needed.
 
-## Why fresh logs and one session?
+## Startup verification and catch-up
 
-We exchange identity/progress, but do not compare existing record contents or
-implement catch-up. Matching IDs and sequence numbers alone do not establish
-that the records agree. Silently reconnecting
-to arbitrary existing data could leave the maps different while new SETs appear
-to succeed. This stage therefore refuses a primary with existing log contents
-and refuses a replica peer session if the replica has existing mutations or has
-already accepted a session in that process. Even a log ending with zero live keys
-is existing mutation history, not a fresh log. A header-only log has sequence 0
-and can reopen as a fresh session; the header itself is not a mutation.
+The fresh-mutation-history restrictions have been removed. Both processes first
+replay their saved IDs, data, and sequence progress. The replica then accepts one
+peer session even when it already has mutations.
 
-A disconnected peer needs a new, deliberately prepared experiment; it is not
-automatically reconnected. No heartbeat is implemented: an idle receiver can close
-the peer connection after its configured receive timeout, and the primary may
-discover that only on its next write. Readiness is not a promise that a network
-connection cannot fail after local application.
+For a primary with records 1–5 and a replica through 3:
 
-COMPACT is disabled on primary and replica during this experiment. Standalone
-behavior remains available. Keep local stream flushes; this does not add an fsync
-or power-loss guarantee. Per-call timeouts are not absolute request deadlines.
+```text
+Primary sends REPLICA experiment-a
+Replica replies READY experiment-a 3
+Primary rejects wrong IDs or replica-ahead progress
+Primary sends 1, 2, 3 → replica compares saved records and ACKs without reapplying
+Primary sends 4, 5    → replica appends, flushes, applies, then ACKs
+Primary prints Replica ready at sequence 5
+Primary starts client workers and accepts new commands
+```
 
-To check normal restart recovery without attempting a new replication session:
+The primary copies `history_records()` once under the store mutex. No store lock
+is held across network I/O. It sends the entire copy in order: this deliberately
+reuses duplicate verification instead of introducing another comparison protocol.
+Only records missing from the replica are appended or applied. A conflict in the
+retained prefix stops startup before any missing suffix is transferred. A replica
+with no records receives the complete history. Matching IDs and sequence numbers
+alone are not treated as proof of matching records.
 
-1. Stop primary and replica with Ctrl-C in their respective terminals.
-2. In terminal 1, restart the replica using **the same** `$replica_log` command.
-3. Connect a client and GET `color`; it should still be `blue`.
+The primary's listening socket is established before recovery, so a TCP client
+may connect, but its commands are not processed until recovery finishes. Replica
+reads remain available and may observe its older state or intermediate catch-up
+progress. Console output reports startup progress; it is not a lag dashboard.
 
-The restarted replica replays the ID, map and sequence position, but rejects a
-new peer session until catch-up is implemented. To inspect the primary log after
-restart, stop both servers and open the primary's log in `replica` mode on a free
-port for read-only access. `standalone` uses the old unnumbered format and cannot
-open a numbered log. Do not create a new temporary path for recovery checks.
-Stop servers before deleting their test logs.
+## Restart using the same files
+
+After the first run, stop both servers with Ctrl-C. In their original terminals,
+restart with the saved paths, without running `mktemp` again:
+
+```sh
+# Terminal 1
+./build-release/kv_server "$replica_log" 6381 120 replica
+
+# Terminal 2
+./build-release/kv_server "$primary_log" 6380 120 primary 6381
+```
+
+The ID is restored from each header. Verification of identical histories does
+not append duplicates, and subsequent writes continue sequence numbering.
+To attach a fresh replica to an existing primary, create a new replica file and
+supply the primary's saved ID with `--history-id`; automatic ID adoption is not
+implemented.
+
+If recovery disconnects after the replica persisted a record but before its ACK
+arrives, primary startup fails. Restart the replica process and retry the primary
+with the same files: replay restores the replica's actual position, matching
+resends are verified, and the remaining suffix is transferred. No rollback or
+blind overwrite occurs. A locally persisted write whose earlier client response
+was uncertain can become replicated during this recovery; uncertainty never
+promised that the write was absent.
+
+We still allow only one accepted peer session per replica process. After a peer
+has disconnected, restart the replica before reconnecting the primary. Rejected
+malformed/wrong-ID attempts do not consume that session. There is no automatic
+retry or heartbeat: a live idle connection can expire under the configured receive
+timeout. A failure during normal replicated writes disables further primary
+mutations until the processes are restarted and recovery succeeds.
+
+COMPACT remains disabled for numbered history. Standalone behavior is unchanged.
+Stream flushes are checked, but this does not add fsync or a power-loss guarantee.
+Per-call timeouts are not absolute recovery deadlines; this implementation targets
+small retained histories. History compaction, indexing and efficient transfers
+remain deferred. Never run two processes against the same log file.
 
 ## Numbered records: what is implemented
 
@@ -194,8 +235,9 @@ bytes. Persistence/application failures disable further store mutations.
 
 We retain the whole numbered history in memory for simple duplicate checks. No
 log index, snapshot, pruning, or generic protocol framework is needed for this
-small experiment. The saved identity is now checked during the handshake, but
-existing histories still need their records verified before resuming replication.
+small experiment. Startup verifies the saved prefix before extending it. Both
+nodes retain the full history in memory; the primary also takes a temporary copy
+for startup recovery.
 
 ## Checks and the next learning step
 
@@ -207,7 +249,7 @@ ctest --test-dir build-release --output-on-failure
 
 The replication tests check live SET/overwrite/DELETE, ordinary replica
 read-only behavior, non-mutation filtering, identical log order with two writers,
-restart reads, existing-history rejection, fragmented/wrong/lost/timed-out ACKs,
+restart recovery, fragmented/wrong/lost/timed-out ACKs,
 and shutdown during a peer wait. They also check numbered ACKs, duplicate/conflicting
 resends, gaps, fragmented/batched records, and a full-size client command with its
 added sequence prefix. C++ tests check recovered progress, continued numbering,
@@ -220,10 +262,14 @@ header-only logs through the server without resupplying an ID.
 
 Handshake tests cover matching and different IDs, malformed requests, rejected
 attempts leaving the peer slot available, and primary rejection of wrong IDs,
-unequal progress, or incomplete READY replies. Failed startup does not append
-mutation records.
+replica-ahead progress, malformed numbers, or incomplete READY replies.
 
-Next, verify existing histories and implement catch-up, following Steps 3–4 of
-the requirements. This checkpoint validates identity and matching progress during
-connection setup; it does not resume replication between processes that already
-have mutations.
+Recovery tests cover an empty replica, partial and equal histories, restart followed
+by continued writes, conflicting histories even when current values agree, and a
+replica ahead of the primary. A controlled fake peer persists a catch-up record
+and drops its ACK; client writes remain blocked during that startup attempt, and
+a retry using the persisted prefix converges without duplicate records.
+
+Remaining Phase 6 work includes broader failure validation and a short results
+report with recovery transcripts and a standalone/replicated latency comparison.
+Automatic reconnect and failover remain separate extensions.

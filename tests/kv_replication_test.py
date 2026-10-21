@@ -1,4 +1,4 @@
-"""Numbered live replication tests; reconnect/catch-up is not implemented."""
+"""Live replication and startup verification/catch-up tests."""
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -23,6 +23,159 @@ def distinct_ports():
     while second == first:
         second = choose_port()
     return first, second
+
+
+RECOVERY_RECORDS = (
+    b'1 SET "color" "blue"',
+    b'2 SET "color" "red"',
+    b'3 DELETE "color"',
+    b'4 SET "shared" "restored"',
+    b'5 SET "color" "green"',
+)
+
+
+def write_history(path, records):
+    path.write_bytes(b"HISTORY test-history\n" + b"".join(record + b"\n" for record in records))
+
+
+def test_startup_catch_up(executable, directory):
+    for prefix in (0, 2, 3, 5):
+        primary_port, replica_port = distinct_ports()
+        primary_log = directory / f"catch-up-primary-{prefix}.log"
+        replica_log = directory / f"catch-up-replica-{prefix}.log"
+        write_history(primary_log, RECOVERY_RECORDS)
+        if prefix:
+            write_history(replica_log, RECOVERY_RECORDS[:prefix])
+        # Prefix 0 starts with a genuinely new replica file.
+        replica = start_server(executable, replica_log, replica_port, 30, "replica")
+        primary = None
+        try:
+            primary = start_server(executable, primary_log, primary_port, 30, "primary", replica_port)
+            assert request(primary_port, b'GET "color"') == b'VALUE "green"\n'
+            assert request(replica_port, b'GET "color"') == b'VALUE "green"\n'
+            assert request(replica_port, b'GET "shared"') == b'VALUE "restored"\n'
+            assert primary_log.read_bytes() == replica_log.read_bytes()
+            assert len(replica_log.read_bytes().splitlines()) == 6
+            assert request(primary_port, b'SET "next" "live"') == b"OK\n"
+            assert request(replica_port, b'GET "next"') == b'VALUE "live"\n'
+            assert primary_log.read_bytes() == replica_log.read_bytes()
+            assert primary_log.read_bytes().endswith(b'6 SET "next" "live"\n')
+        finally:
+            if primary is not None:
+                stop_server(primary)
+            stop_server(replica)
+
+
+def test_recovery_rejects_divergence(executable, directory):
+    conflicting = list(RECOVERY_RECORDS[:2])
+    conflicting[0] = b'1 SET "color" "different-old-value"'
+    # Both maps at sequence 2 contain color=red; history still conflicts.
+    cases = (
+        ("conflict", RECOVERY_RECORDS, conflicting, b"REPLICATION_RECORD"),
+        ("ahead", RECOVERY_RECORDS[:2], RECOVERY_RECORDS, b"Replica is ahead"),
+    )
+    for name, primary_records, replica_records, error in cases:
+        primary_port, replica_port = distinct_ports()
+        primary_log = directory / f"{name}-primary.log"
+        replica_log = directory / f"{name}-replica.log"
+        write_history(primary_log, primary_records)
+        write_history(replica_log, replica_records)
+        before_primary, before_replica = primary_log.read_bytes(), replica_log.read_bytes()
+        replica = start_server(executable, replica_log, replica_port, 30, "replica")
+        try:
+            result = subprocess.run(
+                [str(executable), str(primary_log), str(primary_port), "30", "primary", str(replica_port)],
+                capture_output=True, timeout=3,
+            )
+            assert result.returncode != 0
+            assert error in result.stderr
+            assert primary_log.read_bytes() == before_primary
+            assert replica_log.read_bytes() == before_replica
+        finally:
+            stop_server(replica)
+
+
+def test_interrupted_catch_up(executable, directory):
+    primary_log, replica_log = directory / "interrupted-primary.log", directory / "interrupted-replica.log"
+    write_history(primary_log, RECOVERY_RECORDS)
+    write_history(replica_log, RECOVERY_RECORDS[:2])
+    before = primary_log.read_bytes()
+    applied = threading.Event()
+    release = threading.Event()
+    errors = []
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(3)
+        replica_port = listener.getsockname()[1]
+        primary_port = choose_port()
+        while primary_port == replica_port:
+            primary_port = choose_port()
+
+        def peer():
+            try:
+                connection, _ = listener.accept()
+                connection.settimeout(3)
+                with connection, connection.makefile("rb") as stream:
+                    assert stream.readline() == b"REPLICA test-history\n"
+                    connection.sendall(b"READY test-history 2\n")
+                    for number in (1, 2):
+                        assert stream.readline() == RECOVERY_RECORDS[number - 1] + b"\n"
+                        connection.sendall(f"ACK {number}\n".encode())
+                    assert stream.readline() == RECOVERY_RECORDS[2] + b"\n"
+                    # Persist record 3, then lose its ACK during startup recovery.
+                    with replica_log.open("ab") as log:
+                        log.write(RECOVERY_RECORDS[2] + b"\n")
+                    applied.set()
+                    assert release.wait(3)
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=peer)
+        thread.start()
+        primary = subprocess.Popen(
+            [str(executable), str(primary_log), str(primary_port), "30", "primary", str(replica_port)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        try:
+            assert applied.wait(3)
+            with open_client(primary_port) as client:
+                client.sendall(b'SET "must-not-run" "during-recovery"\n')
+                client.settimeout(0.1)
+                try:
+                    response = client.recv(1024)
+                except socket.timeout:
+                    response = None
+                assert response is None, "client request ran before catch-up completed"
+                assert primary_log.read_bytes() == before
+                release.set()
+                _, error = primary.communicate(timeout=3)
+                assert primary.returncode != 0
+                assert b"before acknowledgment" in error
+        finally:
+            release.set()
+            if primary.poll() is None:
+                primary.kill()
+                primary.wait(timeout=2)
+            thread.join(timeout=4)
+            assert not thread.is_alive()
+        if errors:
+            raise errors[0]
+
+    # Restart with the persisted prefix: record 3 must not be appended twice.
+    replica = start_server(executable, replica_log, replica_port, 30, "replica")
+    primary = None
+    try:
+        primary = start_server(executable, primary_log, primary_port, 30, "primary", replica_port)
+        assert request(primary_port, b'GET "color"') == b'VALUE "green"\n'
+        assert replica_log.read_bytes() == primary_log.read_bytes() == before
+        assert request(primary_port, b'SET "next" "after-recovery"') == b"OK\n"
+        assert request(replica_port, b'GET "next"') == b'VALUE "after-recovery"\n'
+        assert primary_log.read_bytes() == replica_log.read_bytes()
+    finally:
+        if primary is not None:
+            stop_server(primary)
+        stop_server(replica)
 
 
 def test_header_only_restart(executable, directory):
@@ -100,9 +253,16 @@ def test_handshake_validation(executable, directory):
 
 
 def test_bad_handshake_reply(executable, directory):
-    for index, reply in enumerate((
-        b"READY wrong-history 0\n", b"READY test-history 1\n",
-        b"READY test-history\n", b"READY\n",
+    for index, (reply, expected_error) in enumerate((
+        (b"READY wrong-history 0\n", b"Unexpected replica handshake"),
+        (b"READY test-history 1\n", b"Replica is ahead"),
+        (b"READY test-history\n", b"Unexpected replica handshake"),
+        (b"READY\n", b"Unexpected replica handshake"),
+        (b"READY test-history -1\n", b"Invalid replica progress"),
+        (b"READY test-history +1\n", b"Invalid replica progress"),
+        (b"READY test-history 0junk\n", b"Invalid replica progress"),
+        (b"READY test-history 18446744073709551616\n", b"Invalid replica progress"),
+        (b"READY test-history 0 extra\n", b"Unexpected replica handshake"),
     )):
         errors = []
         with socket.socket() as listener:
@@ -135,7 +295,7 @@ def test_bad_handshake_reply(executable, directory):
                     capture_output=True, timeout=5,
                 )
                 assert result.returncode != 0
-                assert b"Unexpected replica acknowledgment" in result.stderr
+                assert expected_error in result.stderr
                 assert log.read_bytes() == b"HISTORY test-history\n"
             finally:
                 thread.join(timeout=4)
@@ -193,20 +353,24 @@ def test_pair(executable, directory):
             stop_server(primary)
         stop_server(replica)
 
-    # Existing replica history is readable after restart, but not silently resynced.
-    replica = start_server(executable, replica_log, replica_port, 30, "replica")
+    # Restart both with the same logs; verification must not append duplicates.
+    before = primary_log.read_bytes()
+    replica = start_server(executable, replica_log, replica_port, 30, "replica", history_id=None)
+    primary = None
     try:
+        primary = start_server(executable, primary_log, primary_port, 30, "primary",
+                               replica_port, history_id=None)
+        assert request(primary_port, b'GET "shared"') == expected
         assert request(replica_port, b'GET "shared"') == expected
-        assert request(replica_port, b"REPLICA test-history").startswith(b"ERROR SESSION_REJECTED")
+        assert primary_log.read_bytes() == replica_log.read_bytes() == before
+        assert request(primary_port, b'SET "shared" "after-restart"') == b"OK\n"
+        assert request(replica_port, b'GET "shared"') == b'VALUE "after-restart"\n'
+        assert primary_log.read_bytes() == replica_log.read_bytes()
+        assert primary_log.read_bytes().endswith(b'104 SET "shared" "after-restart"\n')
     finally:
+        if primary is not None:
+            stop_server(primary)
         stop_server(replica)
-
-    restarted_primary = subprocess.run(
-        [str(executable), str(primary_log), str(primary_port), "30", "primary", str(replica_port)],
-        capture_output=True, timeout=3,
-    )
-    assert restarted_primary.returncode != 0
-    assert b"fresh primary log" in restarted_primary.stderr
 
 
 def test_peer_failure(executable, directory, behavior):
@@ -348,6 +512,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="kv_replication_test_") as temporary:
         directory = Path(temporary)
         test_header_only_restart(executable, directory)
+        test_startup_catch_up(executable, directory)
+        test_recovery_rejects_divergence(executable, directory)
+        test_interrupted_catch_up(executable, directory)
         test_handshake_validation(executable, directory)
         test_bad_handshake_reply(executable, directory)
         test_pair(executable, directory)

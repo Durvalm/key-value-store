@@ -74,9 +74,10 @@ Measure and improve the system using:
 
 The [first-session walkthrough](docs/replication-first-session.md) explains the
 implemented primary/replica experiment, history headers, numbered logs and ACKs,
-and how to run it with fresh logs. Restarted replicas recover their history ID,
-state and sequence position. The handshake validates identity and matching progress;
-existing-history verification and reconnect/catch-up remain the next checkpoints.
+and how to run or restart it with saved logs. Startup validates history identity,
+verifies retained records and catches up the replica before serving primary client
+requests. Manual process restart is supported; automatic reconnect and failover
+remain later extensions.
 
 See [Replication Requirements](docs/replication-requirements.md) for the concepts,
 small implementation checkpoints, acknowledgment rules, and recovery tests.

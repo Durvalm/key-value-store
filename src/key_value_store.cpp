@@ -229,6 +229,12 @@ std::string KeyValueStore::history_id() const
     return history_id_;
 }
 
+std::vector<std::string> KeyValueStore::history_records() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return history_;
+}
+
 std::uint64_t KeyValueStore::apply_replica_record(const std::string &record)
 {
     std::lock_guard<std::mutex> lock(mutex_);

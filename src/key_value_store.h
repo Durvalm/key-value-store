@@ -26,6 +26,8 @@ public:
     void compact();
     std::uint64_t last_sequence() const;
     std::string history_id() const;
+    // Copy once for startup recovery; no store lock is held during network I/O.
+    std::vector<std::string> history_records() const;
     // Verify order/resends, persist and apply a peer mutation; return its ACK number.
     std::uint64_t apply_replica_record(const std::string &record);
 

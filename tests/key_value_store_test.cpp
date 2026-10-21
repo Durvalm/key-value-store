@@ -629,6 +629,12 @@ namespace
             KeyValueStore store(path.string(), true, "test-history");
             expect(store.last_sequence() == 2, "restart recovers progress");
             expect(store.get("color") == "red", "restart recovers data");
+            auto records = store.history_records();
+            expect(records.size() == 2 && records[0] == "1 SET \"color\" \"blue\"",
+                   "history snapshot contains ordered replayed records without the header");
+            records[0] = "changed copy";
+            expect(store.history_records()[0] == "1 SET \"color\" \"blue\"",
+                   "changing a history copy does not modify the store");
             expect(store.apply_replica_record("1 SET \"color\" \"blue\"") == 1,
                    "old matching resend is acknowledged");
             expect(store.get("color") == "red", "old resend cannot undo newer state");
