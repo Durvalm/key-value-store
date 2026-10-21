@@ -17,12 +17,14 @@ def choose_port():
 
 
 def start_server(executable, database_path, port, idle_timeout=1,
-                 role="standalone", replica_port=None):
+                 role="standalone", replica_port=None, history_id="test-history"):
     arguments = [str(executable), str(database_path), str(port), str(idle_timeout)]
     if role != "standalone" or replica_port is not None:
         arguments.append(role)
     if replica_port is not None:
         arguments.append(str(replica_port))
+    if role != "standalone" and history_id is not None:
+        arguments.extend(["--history-id", history_id])
     process = subprocess.Popen(
         arguments,
         stdout=subprocess.DEVNULL,

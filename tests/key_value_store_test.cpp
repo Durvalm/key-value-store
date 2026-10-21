@@ -553,29 +553,86 @@ namespace
             "HELP returns one framed protocol response");
         expect(!help_result.close_requested, "HELP keeps the connection open");
     }
+    void test_history_header()
+    {
+        const auto path = test_file("history_header");
+        for (const bool existing_empty_file : {false, true})
+        {
+            std::filesystem::remove(path);
+            if (existing_empty_file)
+                write_file(path, "");
+            {
+                KeyValueStore store(path.string(), true, "experiment-a");
+                expect(store.history_id() == "experiment-a", "new numbered history retains explicit ID");
+                expect(store.last_sequence() == 0 && store.size() == 0,
+                       "header is not a mutation");
+                expect(read_file(path) == "HISTORY experiment-a\n", "new numbered log has one header");
+            }
+            {
+                KeyValueStore store(path.string(), true);
+                expect(store.history_id() == "experiment-a" && store.last_sequence() == 0,
+                       "header-only history reopens without supplying an ID");
+                expect(read_file(path) == "HISTORY experiment-a\n", "reopen does not duplicate header");
+                store.set("color", "blue");
+            }
+            {
+                KeyValueStore store(path.string(), true);
+                expect(store.history_id() == "experiment-a" && store.last_sequence() == 1 &&
+                       store.get("color") == "blue", "restart recovers ID, data and progress");
+            }
+            const auto saved = read_file(path);
+            expect_runtime_error([&]() { KeyValueStore store(path.string(), true, "experiment-b"); },
+                                 "supplied ID cannot replace an existing history ID");
+            expect(read_file(path) == saved, "ID mismatch leaves log unchanged");
+        }
+
+        for (const std::string header : {
+                 "HISTORY\n", "HISTORY id extra\n", "HISTORY bad/id\n", "HISTORY id",
+                 "OTHER id\n", "\n", "1 SET \"k\" \"v\"\n",
+                 "HISTORY id\nHISTORY id\n"})
+        {
+            write_file(path, header);
+            expect_runtime_error([&]() { KeyValueStore store(path.string(), true, "experiment-a"); },
+                                 "missing, malformed, incomplete or duplicate header is rejected");
+            expect(read_file(path) == header, "failed header recovery does not rewrite the file");
+        }
+        write_file(path, "HISTORY " + std::string(129, 'a') + "\n");
+        expect_runtime_error([&]() { KeyValueStore store(path.string(), true); },
+                             "oversized saved ID is rejected");
+        write_file(path, "");
+        expect_runtime_error([&]() { KeyValueStore store(path.string(), true); },
+                             "new history requires an explicit ID");
+        expect_runtime_error([&]() { KeyValueStore store(path.string(), true, "bad id"); },
+                             "new history ID must be a single safe token");
+        expect(read_file(path).empty(), "invalid or missing ID does not write a header");
+        std::filesystem::remove(path);
+        KeyValueStore standalone;
+        expect(standalone.history_id().empty(), "standalone has no replication history ID");
+    }
+
     void test_numbered_history()
     {
         const auto path = test_file("numbered");
         std::filesystem::remove(path);
         {
-            KeyValueStore store(path.string(), true);
+            KeyValueStore store(path.string(), true, "test-history");
             expect(store.last_sequence() == 0, "fresh numbered history starts at zero");
             store.set("color", "blue");
             store.set("color", "red");
             expect(!store.remove("missing"), "missing delete is not numbered");
             expect(store.last_sequence() == 2, "only actual mutations advance progress");
-            expect(read_file(path) == "1 SET \"color\" \"blue\"\n2 SET \"color\" \"red\"\n",
+            expect(read_file(path) == "HISTORY test-history\n1 SET \"color\" \"blue\"\n2 SET \"color\" \"red\"\n",
                    "numbers are persisted with their mutations");
             expect_runtime_error([&]() { store.compact(); }, "numbered history cannot be compacted");
         }
         {
-            KeyValueStore store(path.string(), true);
+            KeyValueStore store(path.string(), true, "test-history");
             expect(store.last_sequence() == 2, "restart recovers progress");
             expect(store.get("color") == "red", "restart recovers data");
             expect(store.apply_replica_record("1 SET \"color\" \"blue\"") == 1,
                    "old matching resend is acknowledged");
             expect(store.get("color") == "red", "old resend cannot undo newer state");
-            expect(store.last_sequence() == 2 && count_records(read_file(path)) == 2,
+            expect(store.last_sequence() == 2 && count_records(read_file(path)) == 3,
                    "resend does not change progress or append again");
             expect_runtime_error([&]() { store.apply_replica_record("2 SET \"color\" \"wrong\""); },
                                  "conflicting resend is rejected");
@@ -588,7 +645,7 @@ namespace
             expect(read_file(path).ends_with("3 DELETE \"color\"\n"), "delete persists its sequence");
         }
         {
-            KeyValueStore store(path.string(), true);
+            KeyValueStore store(path.string(), true, "test-history");
             expect(store.last_sequence() == 3 && !store.contains("color"),
                    "delete and progress survive restart");
             expect(store.apply_replica_record("4 SET \"full name\" \"Durval \\\"D\\\"\"") == 4,
@@ -610,10 +667,10 @@ namespace
                  "1 SET \"k\" \"v\"\n1 SET \"k\" \"v\"\n",
                  "1 SET \"k\" \"v\"\n2 SET \"k\" \"partial\""})
         {
-            write_file(path, record);
-            expect_runtime_error([&]() { KeyValueStore store(path.string(), true); },
+            write_file(path, "HISTORY test-history\n" + record);
+            expect_runtime_error([&]() { KeyValueStore store(path.string(), true, "test-history"); },
                                  "invalid/incompatible/incomplete numbered history is rejected");
-            expect(read_file(path) == record, "failed recovery leaves original bytes unchanged");
+            expect(read_file(path) == "HISTORY test-history\n" + record, "failed recovery leaves original bytes unchanged");
         }
         std::filesystem::remove(path);
     }
@@ -623,7 +680,7 @@ namespace
         const auto path = test_file("concurrent_numbered");
         std::filesystem::remove(path);
         {
-            KeyValueStore store(path.string(), true);
+            KeyValueStore store(path.string(), true, "test-history");
             auto write = [&]()
             {
                 for (int i = 0; i < 100; ++i)
@@ -633,7 +690,7 @@ namespace
             expect(store.last_sequence() == 200, "concurrent mutations have consecutive numbers");
         }
         {
-            KeyValueStore store(path.string(), true);
+            KeyValueStore store(path.string(), true, "test-history");
             expect(store.last_sequence() == 200, "concurrent numbered log replays without gaps");
         }
         std::filesystem::remove(path);
@@ -655,6 +712,7 @@ void test_contains()
 
 int main()
 {
+    test_history_header();
     test_numbered_history();
     test_invalid_numbered_history();
     test_concurrent_numbered_history();

@@ -14,7 +14,9 @@ class KeyValueStore
 public:
     KeyValueStore() = default;
     // Standalone keeps its original format; replication uses numbered records.
-    explicit KeyValueStore(const std::string &file_path, bool numbered_history = false);
+    // Supply an ID when creating a numbered log; reopen without one to recover it.
+    explicit KeyValueStore(const std::string &file_path, bool numbered_history = false,
+                           const std::string &new_history_id = "");
 
     void set(const std::string &key, const std::string &value);
     std::optional<std::string> get(const std::string &key) const;
@@ -23,6 +25,7 @@ public:
     bool contains(const std::string &key) const;
     void compact();
     std::uint64_t last_sequence() const;
+    std::string history_id() const;
     // Verify order/resends, persist and apply a peer mutation; return its ACK number.
     std::uint64_t apply_replica_record(const std::string &record);
 
@@ -34,6 +37,7 @@ private:
     std::ofstream log_file_;
     std::unordered_map<std::string, std::string> data_;
     bool numbered_history_ = false;
+    std::string history_id_;
     bool write_failed_ = false;
     // Retain records to verify old resends without applying them again.
     std::vector<std::string> history_;

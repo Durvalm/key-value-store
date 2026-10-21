@@ -25,6 +25,36 @@ def distinct_ports():
     return first, second
 
 
+def test_header_only_restart(executable, directory):
+    primary_port, replica_port = distinct_ports()
+    primary_log = directory / "header-primary.log"
+    replica_log = directory / "header-replica.log"
+    # Create headers, stop without mutations, then reopen using only the saved IDs.
+    for history_id in ("header-session", None):
+        replica = start_server(executable, replica_log, replica_port, 30, "replica",
+                               history_id=history_id)
+        primary = None
+        try:
+            primary = start_server(executable, primary_log, primary_port, 30, "primary",
+                                   replica_port, history_id=history_id)
+            assert primary_log.read_bytes() == replica_log.read_bytes() == b"HISTORY header-session\n"
+            if history_id is None:
+                assert request(primary_port, b'SET "color" "blue"') == b"OK\n"
+                assert request(replica_port, b'GET "color"') == b'VALUE "blue"\n'
+                assert primary_log.read_bytes() == replica_log.read_bytes()
+        finally:
+            if primary is not None:
+                stop_server(primary)
+            stop_server(replica)
+
+    missing_id = subprocess.run(
+        [str(executable), str(directory / "needs-id.log"), str(primary_port), "30", "replica"],
+        capture_output=True, timeout=3,
+    )
+    assert missing_id.returncode != 0
+    assert b"explicit history ID" in missing_id.stderr
+
+
 def test_pair(executable, directory):
     primary_port, replica_port = distinct_ports()
     primary_log = directory / "primary.log"
@@ -39,7 +69,7 @@ def test_pair(executable, directory):
         assert request(primary_port, b'SET "missing-value"').startswith(b"ERROR INVALID_ARGUMENT")
         assert request(primary_port, b'GET "absent"') == b"NOT_FOUND\n"
         assert request(primary_port, b'DELETE "absent"') == b"INTEGER 0\n"
-        assert primary_log.read_bytes() == replica_log.read_bytes() == b""
+        assert primary_log.read_bytes() == replica_log.read_bytes() == b"HISTORY test-history\n"
 
         assert request(primary_port, b'SET "name" "Durval"') == b"OK\n"
         assert request(replica_port, b'GET "name"') == b'VALUE "Durval"\n'
@@ -47,7 +77,7 @@ def test_pair(executable, directory):
         assert request(replica_port, b'GET "name"') == b'VALUE "new value"\n'
         assert request(primary_port, b'DELETE "name"') == b"INTEGER 1\n"
         assert request(replica_port, b'GET "name"') == b"NOT_FOUND\n"
-        assert len(primary_log.read_text().splitlines()) == 3
+        assert len(primary_log.read_text().splitlines()) == 4
         assert primary_log.read_bytes() == replica_log.read_bytes()
 
         # Two workers write one shared key: both logs must preserve identical order.
@@ -62,8 +92,8 @@ def test_pair(executable, directory):
             for task in tasks:
                 task.result(timeout=10)
         assert primary_log.read_bytes() == replica_log.read_bytes()
-        assert len(primary_log.read_text().splitlines()) == 103
-        assert [int(line.split()[0]) for line in primary_log.read_text().splitlines()] == list(range(1, 104))
+        assert len(primary_log.read_text().splitlines()) == 104
+        assert [int(line.split()[0]) for line in primary_log.read_text().splitlines()[1:]] == list(range(1, 104))
         expected = request(primary_port, b'GET "shared"')
         assert request(replica_port, b'GET "shared"') == expected
 
@@ -202,7 +232,7 @@ def test_numbered_peer(executable, directory):
                 assert stream.readline() == b"READY\n"
                 client.sendall(record + b"\n")
                 assert stream.readline().startswith(b"ERROR REPLICATION_RECORD")
-                assert log.read_bytes() == b""
+                assert log.read_bytes() == b"HISTORY test-history\n"
         finally:
             stop_server(replica)
 
@@ -228,6 +258,7 @@ def main():
     executable = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix="kv_replication_test_") as temporary:
         directory = Path(temporary)
+        test_header_only_restart(executable, directory)
         test_pair(executable, directory)
         test_numbered_peer(executable, directory)
         test_maximum_command(executable, directory)

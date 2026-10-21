@@ -37,6 +37,12 @@ namespace
         return input.eof();
     }
 
+    bool valid_history_id(const std::string &id)
+    {
+        return !id.empty() && id.size() <= 128 &&
+            id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == std::string::npos;
+    }
+
     std::uint64_t read_sequence(std::istringstream &input)
     {
         std::string text;
@@ -82,10 +88,28 @@ namespace
 }
 
 // Construtor
-KeyValueStore::KeyValueStore(const std::string &file_path, bool numbered_history)
+KeyValueStore::KeyValueStore(const std::string &file_path, bool numbered_history,
+                           const std::string &new_history_id)
     : file_path_(file_path), numbered_history_(numbered_history)
 {
+    if (!new_history_id.empty() && (!numbered_history_ || !valid_history_id(new_history_id)))
+        throw std::runtime_error("History ID requires numbered mode and 1-128 letters, digits, dots, underscores or hyphens");
+
     replay();
+    if (numbered_history_ && history_id_.empty())
+    {
+        if (new_history_id.empty())
+            throw std::runtime_error("New numbered history requires an explicit history ID (--history-id)");
+        history_id_ = new_history_id;
+        open_log();
+        log_file_ << "HISTORY " << history_id_ << '\n';
+        log_file_.flush();
+        if (!log_file_)
+            throw std::runtime_error("Could not write history header");
+        return;
+    }
+    if (!new_history_id.empty() && history_id_ != new_history_id)
+        throw std::runtime_error("Supplied history ID does not match the saved history ID");
     open_log();
 }
 
@@ -197,6 +221,12 @@ std::uint64_t KeyValueStore::last_sequence() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return history_.size();
+}
+
+std::string KeyValueStore::history_id() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return history_id_;
 }
 
 std::uint64_t KeyValueStore::apply_replica_record(const std::string &record)
@@ -337,6 +367,19 @@ void KeyValueStore::replay()
 
     std::size_t line_number = 0;
     std::string record;
+
+    if (numbered_history_ && log_file.peek() != std::ifstream::traits_type::eof())
+    {
+        std::getline(log_file, record);
+        ++line_number;
+        if (!log_file || log_file.eof())
+            throw std::runtime_error("Incomplete history header");
+        std::istringstream header(record);
+        std::string marker;
+        header >> marker >> history_id_;
+        if (marker != "HISTORY" || !valid_history_id(history_id_) || !reached_end(header))
+            throw std::runtime_error("Missing or malformed HISTORY header; use a fresh numbered log");
+    }
 
     while (std::getline(log_file, record))
     {

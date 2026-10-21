@@ -17,7 +17,6 @@
 #include <cstdlib>
 #include <cstddef>
 #include <exception>
-#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -330,10 +329,11 @@ namespace
         std::uint16_t port,
         unsigned int idle_timeout_seconds,
         const std::string &role,
-        std::uint16_t replica_port)
+        std::uint16_t replica_port,
+        const std::string &new_history_id)
     {
-        KeyValueStore store(file_path, role != "standalone");
-        const bool existing_history = std::filesystem::file_size(file_path) != 0;
+        KeyValueStore store(file_path, role != "standalone", new_history_id);
+        const bool existing_history = store.last_sequence() != 0;
         if (role == "primary" && existing_history)
             throw std::runtime_error("This replication experiment requires a fresh primary log; use replica mode to read existing numbered logs");
 
@@ -607,9 +607,21 @@ namespace
 
 int main(int argc, char *argv[])
 {
+    // Keep the existing positional arguments; the optional ID must come last.
+    std::string new_history_id;
+    if (argc >= 3 && std::string(argv[argc - 2]) == "--history-id")
+    {
+        new_history_id = argv[argc - 1];
+        if (new_history_id.empty())
+        {
+            std::cerr << "History ID must not be empty.\n";
+            return EXIT_FAILURE;
+        }
+        argc -= 2;
+    }
     if (argc > 6)
     {
-        std::cerr << "Usage: kv_server [persistence-file] [port] [idle-timeout-seconds] [standalone|primary|replica] [replica-port]\n";
+        std::cerr << "Usage: kv_server [persistence-file] [port] [idle-timeout-seconds] [standalone|primary|replica] [replica-port] [--history-id id]\n";
         return EXIT_FAILURE;
     }
 
@@ -659,7 +671,7 @@ int main(int argc, char *argv[])
     try
     {
 
-        return run_server(file_path, port, idle_timeout_seconds, role, replica_port);
+        return run_server(file_path, port, idle_timeout_seconds, role, replica_port, new_history_id);
     }
     catch (const std::exception &error)
     {
