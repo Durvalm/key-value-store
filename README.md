@@ -98,6 +98,10 @@ Introduce multiple database nodes with:
 
 ### 7. Distribution
 
+See [Distribution Requirements](docs/distribution-requirements.md) for fixed
+partition routing, replicated groups, acceptance checks, and the separate
+consistent-hashing/rebalancing and advanced follow-up milestones.
+
 Explore selected distributed-system mechanisms such as:
 
 - Partitioning and consistent hashing
