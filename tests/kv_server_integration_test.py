@@ -17,7 +17,8 @@ def choose_port():
 
 
 def start_server(executable, database_path, port, idle_timeout=1,
-                 role="standalone", replica_port=None, history_id="test-history"):
+                 role="standalone", replica_port=None, history_id="test-history",
+                 max_log_bytes=None):
     arguments = [str(executable), str(database_path), str(port), str(idle_timeout)]
     if role != "standalone" or replica_port is not None:
         arguments.append(role)
@@ -25,6 +26,21 @@ def start_server(executable, database_path, port, idle_timeout=1,
         arguments.append(str(replica_port))
     if role != "standalone" and history_id is not None:
         arguments.extend(["--history-id", history_id])
+    if max_log_bytes is not None:
+        # Set the limit in a child, then replace it with the server. The PID and
+        # resource limit survive exec; the test runner and other servers are unaffected.
+        launcher = """
+import os
+import resource
+import signal
+import sys
+
+limit = int(sys.argv[1])
+signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+os.execv(sys.argv[2], sys.argv[2:])
+"""
+        arguments = [sys.executable, "-c", launcher, str(max_log_bytes), *arguments]
     process = subprocess.Popen(
         arguments,
         stdout=subprocess.DEVNULL,

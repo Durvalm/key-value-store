@@ -490,6 +490,61 @@ def test_numbered_peer(executable, directory):
             stop_server(replica)
 
 
+def test_replica_persistence_failure(executable, directory):
+    primary_port, replica_port = distinct_ports()
+    primary_log = directory / "persistence-failure-primary.log"
+    replica_log = directory / "persistence-failure-replica.log"
+    first_record = b'HISTORY test-history\n1 SET "color" "blue"\n'
+    # Exactly the header and first record fit. The next append has no space.
+    replica = start_server(executable, replica_log, replica_port, 30, "replica",
+                           max_log_bytes=len(first_record))
+    primary = None
+    try:
+        primary = start_server(executable, primary_log, primary_port, 30, "primary", replica_port)
+        assert request(primary_port, b'SET "color" "blue"') == b"OK\n"
+        assert primary_log.read_bytes() == replica_log.read_bytes() == first_record
+
+        response = request(primary_port, b'SET "color" "red"')
+        assert response.startswith(b"ERROR REPLICATION_UNCERTAIN"), response
+        assert request(primary_port, b'GET "color"') == b'VALUE "red"\n'
+        assert request(replica_port, b'GET "color"') == b'VALUE "blue"\n'
+        assert replica.poll() is None, "replica died instead of handling the write error"
+        assert replica_log.read_bytes() == first_record
+        primary_records = first_record + b'2 SET "color" "red"\n'
+        assert primary_log.read_bytes() == primary_records
+
+        # Failure is not silently followed by local-only successful writes.
+        for command in (b'SET "color" "green"', b'DELETE "color"'):
+            assert request(primary_port, command).startswith(b"ERROR REPLICA_UNAVAILABLE")
+        assert primary_log.read_bytes() == primary_records
+        assert replica_log.read_bytes() == first_record
+        assert request(primary_port, b'GET "color"') == b'VALUE "red"\n'
+        assert request(replica_port, b'GET "color"') == b'VALUE "blue"\n'
+    finally:
+        if primary is not None:
+            stop_server(primary)
+        stop_server(replica)
+
+    # Remove the test-only limit by restarting the replica normally. Its clean
+    # saved prefix must catch up without duplicating the first mutation.
+    replica = start_server(executable, replica_log, replica_port, 30, "replica", history_id=None)
+    primary = None
+    try:
+        primary = start_server(executable, primary_log, primary_port, 30, "primary",
+                               replica_port, history_id=None)
+        assert request(primary_port, b'GET "color"') == b'VALUE "red"\n'
+        assert request(replica_port, b'GET "color"') == b'VALUE "red"\n'
+        assert primary_log.read_bytes() == replica_log.read_bytes() == primary_records
+        assert request(primary_port, b'SET "color" "green"') == b"OK\n"
+        assert request(replica_port, b'GET "color"') == b'VALUE "green"\n'
+        assert primary_log.read_bytes() == replica_log.read_bytes()
+        assert replica_log.read_bytes().endswith(b'3 SET "color" "green"\n')
+    finally:
+        if primary is not None:
+            stop_server(primary)
+        stop_server(replica)
+
+
 def test_maximum_command(executable, directory):
     primary_port, replica_port = distinct_ports()
     replica = start_server(executable, directory / "max-replica.log", replica_port, 30, "replica")
@@ -519,6 +574,7 @@ def main():
         test_bad_handshake_reply(executable, directory)
         test_pair(executable, directory)
         test_numbered_peer(executable, directory)
+        test_replica_persistence_failure(executable, directory)
         test_maximum_command(executable, directory)
         for behavior in ("fragmented", "wrong", "lost", "timeout", "shutdown"):
             test_peer_failure(executable, directory, behavior)

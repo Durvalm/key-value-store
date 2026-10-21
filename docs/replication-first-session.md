@@ -270,6 +270,19 @@ replica ahead of the primary. A controlled fake peer persists a catch-up record
 and drops its ACK; client writes remain blocked during that startup attempt, and
 a retry using the persisted prefix converges without duplicate records.
 
+The persistence-failure test starts only the replica under `RLIMIT_FSIZE`, with
+room for the header and first SET. A small Python launcher sets the child process's
+file-size limit, ignores `SIGXFSZ` so the write returns an error instead of killing
+the process, then uses `exec` to run the normal server. The primary and test runner
+are unaffected. No production failure switch is added.
+
+The next SET persists locally on the primary but cannot append on the replica.
+The test checks the uncertain client response, unchanged replica value/log,
+locally updated primary value, rejection of later SET/DELETE, and clean shutdown.
+Restarting without the test limit must catch up the saved prefix and resume
+numbering without duplicates. This exercises a real failed append/flush with no
+remaining file space; it does not simulate every partial-write or hardware failure.
+
 Remaining Phase 6 work includes broader failure validation and a short results
 report with recovery transcripts and a standalone/replicated latency comparison.
 Automatic reconnect and failover remain separate extensions.
