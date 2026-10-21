@@ -54,7 +54,7 @@ namespace
     }
 }
 
-int connect_to_replica(std::uint16_t port)
+int connect_to_replica(std::uint16_t port, const std::string &history_id, std::uint64_t last_sequence)
 {
     const int replica_socket =
         ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -129,7 +129,10 @@ int connect_to_replica(std::uint16_t port)
         }
 
         // Explicitly mark this as a peer session, rather than an ordinary client.
-        exchange_message(replica_socket, "REPLICA\n", "READY\n");
+        exchange_message(
+            replica_socket,
+            "REPLICA " + history_id + "\n",
+            "READY " + history_id + ' ' + std::to_string(last_sequence) + "\n");
         return replica_socket;
     }
     catch (...)

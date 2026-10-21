@@ -55,6 +55,95 @@ def test_header_only_restart(executable, directory):
     assert b"explicit history ID" in missing_id.stderr
 
 
+def test_handshake_validation(executable, directory):
+    primary_port, replica_port = distinct_ports()
+    replica_log = directory / "handshake-replica.log"
+    replica = start_server(executable, replica_log, replica_port, 30, "replica",
+                           history_id="handshake-history")
+    primary = None
+    try:
+        for command, error in (
+            (b"REPLICA", b"ERROR INVALID_HANDSHAKE"),
+            (b"REPLICA handshake-history extra", b"ERROR INVALID_HANDSHAKE"),
+            (b"REPLICA handshake-history\r", b"ERROR INVALID_HANDSHAKE"),
+            (b"REPLICA unrelated-history", b"ERROR HISTORY_MISMATCH"),
+        ):
+            with open_client(replica_port) as client, client.makefile("rb") as stream:
+                client.sendall(command + b"\n")
+                assert stream.readline().startswith(error)
+                assert stream.readline() == b""
+            assert replica_log.read_bytes() == b"HISTORY handshake-history\n"
+
+        # The real primary must fail startup if the replica has a different ID.
+        mismatched_log = directory / "mismatched-primary.log"
+        mismatched = subprocess.run(
+            [str(executable), str(mismatched_log), str(primary_port), "30", "primary",
+             str(replica_port), "--history-id", "unrelated-history"],
+            capture_output=True, timeout=3,
+        )
+        assert mismatched.returncode != 0
+        assert b"HISTORY_MISMATCH" in mismatched.stderr
+        assert mismatched_log.read_bytes() == b"HISTORY unrelated-history\n"
+
+        # Rejected attempts must not claim the peer slot or bypass read-only rules.
+        assert request(replica_port, b'SET "direct" "no"').startswith(b"ERROR READ_ONLY")
+        primary_log = directory / "handshake-primary.log"
+        primary = start_server(executable, primary_log, primary_port, 30, "primary",
+                               replica_port, history_id="handshake-history")
+        assert request(primary_port, b'SET "color" "blue"') == b"OK\n"
+        assert request(replica_port, b'GET "color"') == b'VALUE "blue"\n'
+        assert primary_log.read_bytes() == replica_log.read_bytes()
+    finally:
+        if primary is not None:
+            stop_server(primary)
+        stop_server(replica)
+
+
+def test_bad_handshake_reply(executable, directory):
+    for index, reply in enumerate((
+        b"READY wrong-history 0\n", b"READY test-history 1\n",
+        b"READY test-history\n", b"READY\n",
+    )):
+        errors = []
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener.settimeout(3)
+            replica_port = listener.getsockname()[1]
+            primary_port = choose_port()
+            while primary_port == replica_port:
+                primary_port = choose_port()
+
+            def peer():
+                try:
+                    connection, _ = listener.accept()
+                    connection.settimeout(3)
+                    with connection, connection.makefile("rb") as stream:
+                        assert stream.readline() == b"REPLICA test-history\n"
+                        connection.sendall(reply)
+                        assert stream.readline() == b""
+                except Exception as error:
+                    errors.append(error)
+
+            thread = threading.Thread(target=peer)
+            thread.start()
+            log = directory / f"bad-handshake-{index}.log"
+            try:
+                result = subprocess.run(
+                    [str(executable), str(log), str(primary_port), "30", "primary",
+                     str(replica_port), "--history-id", "test-history"],
+                    capture_output=True, timeout=5,
+                )
+                assert result.returncode != 0
+                assert b"Unexpected replica acknowledgment" in result.stderr
+                assert log.read_bytes() == b"HISTORY test-history\n"
+            finally:
+                thread.join(timeout=4)
+                assert not thread.is_alive()
+            if errors:
+                raise errors[0]
+
+
 def test_pair(executable, directory):
     primary_port, replica_port = distinct_ports()
     primary_log = directory / "primary.log"
@@ -98,7 +187,7 @@ def test_pair(executable, directory):
         assert request(replica_port, b'GET "shared"') == expected
 
         # A second peer cannot enter this one-session experiment.
-        assert request(replica_port, b"REPLICA").startswith(b"ERROR SESSION_REJECTED")
+        assert request(replica_port, b"REPLICA test-history").startswith(b"ERROR SESSION_REJECTED")
     finally:
         if primary is not None:
             stop_server(primary)
@@ -108,7 +197,7 @@ def test_pair(executable, directory):
     replica = start_server(executable, replica_log, replica_port, 30, "replica")
     try:
         assert request(replica_port, b'GET "shared"') == expected
-        assert request(replica_port, b"REPLICA").startswith(b"ERROR SESSION_REJECTED")
+        assert request(replica_port, b"REPLICA test-history").startswith(b"ERROR SESSION_REJECTED")
     finally:
         stop_server(replica)
 
@@ -139,8 +228,8 @@ def test_peer_failure(executable, directory, behavior):
                 connection, _ = listener.accept()
                 connection.settimeout(7)
                 with connection, connection.makefile("rb") as stream:
-                    assert stream.readline() == b"REPLICA\n"
-                    connection.sendall(b"READY\n")
+                    assert stream.readline() == b"REPLICA test-history\n"
+                    connection.sendall(b"READY test-history 0\n")
                     assert stream.readline() == b'1 SET "key" "local"\n'
                     received.set()
                     if behavior == "fragmented":
@@ -193,8 +282,8 @@ def test_numbered_peer(executable, directory):
     replica = start_server(executable, log, port, 30, "replica")
     try:
         with open_client(port) as client, client.makefile("rb") as stream:
-            client.sendall(b"REPLICA\n")
-            assert stream.readline() == b"READY\n"
+            client.sendall(b"REPLICA test-history\n")
+            assert stream.readline() == b"READY test-history 0\n"
             # Fragmented input, followed by multiple complete records in one send.
             client.sendall(b'1 SET "color" ')
             client.sendall(b'"blue"\n2 SET "color" "red"\n')
@@ -228,8 +317,8 @@ def test_numbered_peer(executable, directory):
         replica = start_server(executable, log, port, 30, "replica")
         try:
             with open_client(port) as client, client.makefile("rb") as stream:
-                client.sendall(b"REPLICA\n")
-                assert stream.readline() == b"READY\n"
+                client.sendall(b"REPLICA test-history\n")
+                assert stream.readline() == b"READY test-history 0\n"
                 client.sendall(record + b"\n")
                 assert stream.readline().startswith(b"ERROR REPLICATION_RECORD")
                 assert log.read_bytes() == b"HISTORY test-history\n"
@@ -259,6 +348,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="kv_replication_test_") as temporary:
         directory = Path(temporary)
         test_header_only_restart(executable, directory)
+        test_handshake_validation(executable, directory)
+        test_bad_handshake_reply(executable, directory)
         test_pair(executable, directory)
         test_numbered_peer(executable, directory)
         test_maximum_command(executable, directory)

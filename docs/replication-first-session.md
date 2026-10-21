@@ -4,9 +4,9 @@ This is the next small implementation step: a primary forwards successful
 mutations over one persistent connection and checks the receiver's reply before
 returning success to the client. Mutations now have persistent sequence numbers
 and numbered acknowledgments. It is still a fresh-session experiment, not the full
-[replication requirements](replication-requirements.md): history identity is now
-stored locally, but identity/progress exchange, reconnection, and catch-up are
-not implemented yet.
+[replication requirements](replication-requirements.md): history identity and
+progress are checked during the handshake, but verification of existing record
+contents, reconnection, and catch-up are not implemented yet.
 
 ## Run it
 
@@ -39,8 +39,8 @@ nodes. IDs contain 1–128 letters, digits, dots, underscores or hyphens. New nu
 logs require `--history-id`; reopening an existing header restores its ID without
 the option. If supplied on reopen, the ID must match the saved one. The option
 must come last and is only for primary/replica roles. There is no automatic ID
-generation or network identity validation in this storage checkpoint; matching
-IDs are currently the operator's responsibility.
+generation or automatic ID adoption. The replica rejects a different history ID,
+and the primary requires the reply to contain its expected ID and sequence.
 
 In terminal 3:
 
@@ -85,11 +85,15 @@ primary and replica ports and separate log files.
 ## Understand the code in this order
 
 1. **Connection and handshake:** `connect_to_replica()` creates/connects a socket,
-   configures five-second per-call I/O timeouts, sends `REPLICA\n`, and requires
-   `READY\n`. On failure it closes its socket. On success `run_server()` owns the
-   descriptor and passes it to the workers.
-2. **Peer versus ordinary client:** a replica accepts that marker on one fresh
-   connection. Only that session can apply mutations. Ordinary replica client
+   configures five-second per-call I/O timeouts, sends `REPLICA <history-id>\n`,
+   and requires exactly `READY <history-id> <last-sequence>\n` using the primary's
+   expected values. It receives these values as arguments, not the store itself.
+   On failure it closes its socket. On success `run_server()` owns the descriptor
+   and passes it to the workers. For fresh logs, the sequence is 0.
+2. **Peer versus ordinary client:** the replica parses the ID, rejects missing or
+   extra arguments and different IDs, and permits only one fresh session. Rejected
+   handshakes do not consume that session. Its READY reply uses its own saved ID
+   and progress. Only an accepted session can apply mutations. Ordinary replica client
    connections can read but cannot write. The marker distinguishes traffic;
    it is not authentication. This experiment assumes trusted local processes.
 3. **Mutation selection:** `CommandResult::mutation_applied` defaults to false.
@@ -122,8 +126,9 @@ worker coordination are in `server_main.cpp`. No new networking class is needed.
 
 ## Why fresh logs and one session?
 
-We have sequence numbers and a saved history ID, but not identity/progress exchange
-or a catch-up protocol. Silently reconnecting
+We exchange identity/progress, but do not compare existing record contents or
+implement catch-up. Matching IDs and sequence numbers alone do not establish
+that the records agree. Silently reconnecting
 to arbitrary existing data could leave the maps different while new SETs appear
 to succeed. This stage therefore refuses a primary with existing log contents
 and refuses a replica peer session if the replica has existing mutations or has
@@ -189,9 +194,8 @@ bytes. Persistence/application failures disable further store mutations.
 
 We retain the whole numbered history in memory for simple duplicate checks. No
 log index, snapshot, pruning, or generic protocol framework is needed for this
-small experiment. The saved history identity must still be exchanged and validated
-before supporting connections to existing histories; a matching sequence alone
-is insufficient.
+small experiment. The saved identity is now checked during the handshake, but
+existing histories still need their records verified before resuming replication.
 
 ## Checks and the next learning step
 
@@ -214,7 +218,12 @@ Header tests cover missing/existing-empty files, preserved IDs across restart,
 header-only progress, supplied-ID mismatches, malformed headers, and reopening
 header-only logs through the server without resupplying an ID.
 
-Next, exchange and validate history identity/progress, then implement catch-up,
-following Steps 3–4 of the requirements. This checkpoint recovers identity and
-sequence progress locally; it does not resume replication between processes that
-already have mutations.
+Handshake tests cover matching and different IDs, malformed requests, rejected
+attempts leaving the peer slot available, and primary rejection of wrong IDs,
+unequal progress, or incomplete READY replies. Failed startup does not append
+mutation records.
+
+Next, verify existing histories and implement catch-up, following Steps 3–4 of
+the requirements. This checkpoint validates identity and matching progress during
+connection setup; it does not resume replication between processes that already
+have mutations.

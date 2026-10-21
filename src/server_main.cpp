@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <exception>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -230,20 +231,43 @@ namespace
                 // Remove the request and its newline from pending_data.
                 pending_data.erase(0, newline_position + 1);
 
-                if (role == "replica" && !peer_connection && request == "REPLICA")
+                if (role == "replica" && !peer_connection)
                 {
-                    // Only one fresh session is supported until numbered catch-up exists.
-                    std::lock_guard<std::mutex> lock(replication_mutex);
-                    if (replica_session_used)
+                    std::istringstream handshake(request);
+                    std::string command;
+                    handshake >> command;
+                    if (command == "REPLICA")
                     {
-                        send_all(client_socket, "ERROR SESSION_REJECTED \"Replica requires a fresh log and session\"\n");
-                        return;
+                        std::string history_id;
+                        std::string extra;
+                        if (request.size() > max_request_size ||
+                            request.find_first_of("\r\n") != std::string::npos ||
+                            !(handshake >> history_id) || (handshake >> extra))
+                        {
+                            send_all(client_socket, "ERROR INVALID_HANDSHAKE \"Usage: REPLICA <history-id>\"\n");
+                            return;
+                        }
+                        if (history_id != store.history_id())
+                        {
+                            send_all(client_socket, "ERROR HISTORY_MISMATCH \"Replica belongs to a different history\"\n");
+                            return;
+                        }
+
+                        // Validate before claiming the one allowed peer session.
+                        std::lock_guard<std::mutex> lock(replication_mutex);
+                        if (replica_session_used)
+                        {
+                            send_all(client_socket, "ERROR SESSION_REJECTED \"Replica requires a fresh log and session\"\n");
+                            return;
+                        }
+                        replica_session_used = true;
+                        peer_connection = true;
+                        const std::string response = "READY " + store.history_id() + ' ' +
+                            std::to_string(store.last_sequence()) + '\n';
+                        if (!send_all(client_socket, response))
+                            return;
+                        continue;
                     }
-                    replica_session_used = true;
-                    peer_connection = true;
-                    if (!send_all(client_socket, "READY\n"))
-                        return;
-                    continue;
                 }
 
                 CommandResult result;
@@ -391,7 +415,7 @@ namespace
         {
             try
             {
-                replica_socket = connect_to_replica(replica_port);
+                replica_socket = connect_to_replica(replica_port, store.history_id(), store.last_sequence());
                 std::cout << "Connected to replica on 127.0.0.1:" << replica_port << '\n';
             }
             catch (...)
