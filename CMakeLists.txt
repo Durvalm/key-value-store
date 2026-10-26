@@ -15,6 +15,7 @@ find_package(Threads REQUIRED)
 add_library(kv_store
     src/key_value_store.cpp
     src/command_processor.cpp
+    src/command_parser.cpp
     src/partition.cpp
 )
 
@@ -81,6 +82,11 @@ if(BUILD_TESTING)
     add_test(NAME kv_partition_tests COMMAND kv_partition_tests)
     set_tests_properties(kv_partition_tests PROPERTIES TIMEOUT 30)
 
+    add_executable(kv_command_parser_tests tests/command_parser_test.cpp)
+    target_link_libraries(kv_command_parser_tests PRIVATE kv_store)
+    add_test(NAME kv_command_parser_tests COMMAND kv_command_parser_tests)
+    set_tests_properties(kv_command_parser_tests PROPERTIES TIMEOUT 30)
+
     add_test(
         NAME kv_server_integration_tests
         COMMAND
@@ -137,5 +143,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
             -Wpedantic
         )
         target_compile_options(kv_partition_tests PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(kv_command_parser_tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endif()

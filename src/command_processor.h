@@ -1,11 +1,9 @@
 #pragma once
 
 #include "key_value_store.h"
+#include "command_parser.h"
 
-#include <cstddef>
 #include <string>
-
-inline constexpr std::size_t max_request_size = 4096;
 
 struct CommandResult
 {
