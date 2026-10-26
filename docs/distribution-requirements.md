@@ -288,7 +288,8 @@ Both return WRONG_PARTITION because `color` belongs to partition 0. The tests
 cover wrong-node operations, unchanged logs, same-configuration restart, swapped
 or omitted partition identity, malformed routing headers, compaction, numbered
 replay/resends, and compatibility with a partitioned primary/replica pair.
-Full two-group restart/failure testing is still Steps 4–5.
+The two-group replica-failure/recovery scenario is now automated under Step 5;
+other acceptance checks remain listed below.
 
 ## Step 4: Combine partitioning with replication
 
@@ -348,6 +349,27 @@ already deleted the key. Request IDs and persisted deduplication are a later tra
 
 **Make it click:** an unhealthy partition does not make another partition the
 owner. Failure detection, ownership, and write authority are different decisions.
+
+### Implemented check: replica failure stays within its group
+
+`kv_distribution_tests` now starts two independent primary/replica pairs and
+uses the routing client to write to both. It stops replica 0, checks that the next
+write reports REPLICATION_UNCERTAIN, and verifies later SET/DELETE requests are
+rejected while GET still reads the locally applied value. The same client session
+continues to read/write group 1. Log checks confirm that rejected writes append
+nothing and that group 1's primary and replica stay synchronized.
+
+The test then restarts only group 0 with the original logs and identities. A direct
+read from its replica verifies catch-up of the uncertain write; the next successful
+write advances the sequence without gaps or duplicate application. Group 1 is
+never restarted. This covers graceful replica-process loss and manual recovery;
+it does not add automatic reconnection, failover, or exhaustive network faults.
+
+Run this focused suite with:
+
+```sh
+ctest --test-dir build-release -R kv_distribution_tests --output-on-failure
+```
 
 ## Step 6: Validate and report the fixed-partition milestone
 

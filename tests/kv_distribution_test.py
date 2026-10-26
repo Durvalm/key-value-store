@@ -1,4 +1,4 @@
-"""Exercise client routing against two independent standalone servers."""
+"""Exercise partition routing, ownership, and replicated failure isolation."""
 import subprocess
 import sys
 import tempfile
@@ -10,8 +10,7 @@ from kv_server_integration_test import (
 
 
 def test_partitioned_replication(server_executable):
-    # Check the new option/header with an existing primary/replica pair. The
-    # full two-group failure experiment remains the next milestone.
+    # Check ownership and read-only behavior with one primary/replica pair.
     with tempfile.TemporaryDirectory() as directory:
         primary_port, replica_port = choose_port(), choose_port()
         while primary_port == replica_port:
@@ -38,6 +37,91 @@ def test_partitioned_replication(server_executable):
             expected = ('PARTITION 1 fnv1a64-mod2-v1\nHISTORY group-1\n'
                         '1 SET "full name" "Durval"\n').encode()
             assert primary_path.read_bytes() == replica_path.read_bytes() == expected
+        finally:
+            for server in reversed(servers):
+                stop_server(server)
+
+
+def test_replicated_failure_isolation(server_executable, client_executable):
+    # Four separate processes/logs; only group 0 is stopped and recovered.
+    ports = []
+    while len(ports) < 4:
+        port = choose_port()
+        if port not in ports:
+            ports.append(port)
+    primary_ports = ports[:2]
+    replica_ports = ports[2:]
+    arguments = [str(client_executable), '--cluster', SERVER_HOST,
+                 *map(str, primary_ports)]
+
+    def run(commands, expected):
+        result = subprocess.run(arguments, input=commands, text=True,
+                                capture_output=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == expected, result.stdout
+
+    with tempfile.TemporaryDirectory() as directory:
+        primary_paths = [Path(directory) / f'primary-{i}.log' for i in range(2)]
+        replica_paths = [Path(directory) / f'replica-{i}.log' for i in range(2)]
+        servers = []
+        primaries = []
+        replicas = []
+        try:
+            for i in range(2):
+                replica = start_server(server_executable, replica_paths[i], replica_ports[i],
+                    idle_timeout=10, role='replica', history_id=f'group-{i}', partition_id=i)
+                servers.append(replica)
+                replicas.append(replica)
+                primary = start_server(server_executable, primary_paths[i], primary_ports[i],
+                    idle_timeout=10, role='primary', replica_port=replica_ports[i],
+                    history_id=f'group-{i}', partition_id=i)
+                servers.append(primary)
+                primaries.append(primary)
+
+            run('SET "color" "blue"\nSET "full name" "Durval"\nEXIT\n',
+                ['OK', 'OK', 'BYE'])
+            for i in range(2):
+                assert primary_paths[i].read_bytes() == replica_paths[i].read_bytes()
+            replica_before = replica_paths[0].read_bytes()
+
+            stop_server(replicas[0])
+            # One session sees group 0 fail, still reads its locally applied
+            # value, and continues writing/reading group 1. Later writes and
+            # deletes on group 0 must be rejected before changing its log.
+            run('SET "color" "yellow"\nSET "color" "orange"\nDELETE "color"\n'
+                'GET "color"\nSET "full name" "Still working"\nGET "full name"\nEXIT\n',
+                ['ERROR REPLICATION_UNCERTAIN "Write applied locally; replica acknowledgment is unconfirmed"',
+                 'ERROR REPLICA_UNAVAILABLE "Replication failed; further writes are disabled"',
+                 'ERROR REPLICA_UNAVAILABLE "Replication failed; further writes are disabled"',
+                 'VALUE "yellow"', 'OK', 'VALUE "Still working"', 'BYE'])
+            assert replica_paths[0].read_bytes() == replica_before
+            expected_primary = replica_before + b'2 SET "color" "yellow"\n'
+            assert primary_paths[0].read_bytes() == expected_primary
+            assert primary_paths[1].read_bytes() == replica_paths[1].read_bytes()
+            assert all(server.poll() is None for server in [*primaries, replicas[1]])
+
+            stop_server(primaries[0])
+            replica = start_server(server_executable, replica_paths[0], replica_ports[0],
+                idle_timeout=10, role='replica', history_id='group-0', partition_id=0)
+            servers.append(replica)
+            primary = start_server(server_executable, primary_paths[0], primary_ports[0],
+                idle_timeout=10, role='primary', replica_port=replica_ports[0],
+                history_id='group-0', partition_id=0)
+            servers.append(primary)
+
+            # Reading the replica directly proves startup catch-up, rather than
+            # merely proving that the primary replayed its own local log.
+            with open_client(replica_ports[0]) as client, client.makefile('rb') as stream:
+                client.sendall(b'GET "color"\n')
+                expect_line(stream, b'VALUE "yellow"\n')
+            assert primary_paths[0].read_bytes() == replica_paths[0].read_bytes() == expected_primary
+            run('SET "color" "green"\nGET "color"\nGET "full name"\nEXIT\n',
+                ['OK', 'VALUE "green"', 'VALUE "Still working"', 'BYE'])
+            assert primary_paths[0].read_bytes() == replica_paths[0].read_bytes() == (
+                expected_primary + b'3 SET "color" "green"\n')
+            assert primary_paths[1].read_bytes() == replica_paths[1].read_bytes() == (
+                b'PARTITION 1 fnv1a64-mod2-v1\nHISTORY group-1\n'
+                b'1 SET "full name" "Durval"\n2 SET "full name" "Still working"\n')
         finally:
             for server in reversed(servers):
                 stop_server(server)
@@ -156,7 +240,8 @@ def main():
     assert result.stdout.startswith('ERROR INVALID_ARGUMENT'), result.stdout
     assert result.stdout.endswith('BYE\n')
     test_partitioned_replication(server_executable)
-    print('Distribution routing and ownership tests passed.')
+    test_replicated_failure_isolation(server_executable, client_executable)
+    print('Distribution routing, ownership, and failure-isolation tests passed.')
 
 
 if __name__ == '__main__':
