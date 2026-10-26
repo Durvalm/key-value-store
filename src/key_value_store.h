@@ -13,11 +13,14 @@ class KeyValueStore
 {
 public:
     KeyValueStore() = default;
-    // Standalone keeps its original format; replication uses numbered records.
+    // Unpartitioned standalone keeps its original format; replication numbers records.
+    // A partition adds a fixed routing header and requires matching startup configuration.
     // Supply an ID when creating a numbered log; reopen without one to recover it.
     explicit KeyValueStore(const std::string &file_path, bool numbered_history = false,
-                           const std::string &new_history_id = "");
+                           const std::string &new_history_id = "", int partition_id = -1);
 
+    // Partition identity is fixed at construction; -1 means unpartitioned.
+    bool owns_key(const std::string &key) const;
     void set(const std::string &key, const std::string &value);
     std::optional<std::string> get(const std::string &key) const;
     bool remove(const std::string &key);
@@ -32,12 +35,15 @@ public:
     std::uint64_t apply_replica_record(const std::string &record);
 
 private:
+    void require_owned_key(const std::string &key) const;
     void replay();
     void append_record(const std::string &record);
     void open_log();
     std::string file_path_;
     std::ofstream log_file_;
     std::unordered_map<std::string, std::string> data_;
+    int partition_id_ = -1;
+    bool partition_header_present_ = false;
     bool numbered_history_ = false;
     std::string history_id_;
     bool write_failed_ = false;

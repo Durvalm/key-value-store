@@ -354,9 +354,9 @@ namespace
         unsigned int idle_timeout_seconds,
         const std::string &role,
         std::uint16_t replica_port,
-        const std::string &new_history_id)
+        const std::string &new_history_id, int partition_id)
     {
-        KeyValueStore store(file_path, role != "standalone", new_history_id);
+        KeyValueStore store(file_path, role != "standalone", new_history_id, partition_id);
 
         const int listening_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
@@ -628,21 +628,30 @@ namespace
 
 int main(int argc, char *argv[])
 {
-    // Keep the existing positional arguments; the optional ID must come last.
+    // Optional pairs follow the positional arguments, in either order.
     std::string new_history_id;
-    if (argc >= 3 && std::string(argv[argc - 2]) == "--history-id")
+    int partition_id = -1;
+    while (argc >= 3)
     {
-        new_history_id = argv[argc - 1];
-        if (new_history_id.empty())
+        const std::string option = argv[argc - 2];
+        const std::string value = argv[argc - 1];
+        if (option == "--history-id" && new_history_id.empty() && !value.empty())
+            new_history_id = value;
+        else if (option == "--partition" && partition_id == -1 && (value == "0" || value == "1"))
+            partition_id = value == "0" ? 0 : 1;
+        else if (option.starts_with("--"))
         {
-            std::cerr << "History ID must not be empty.\n";
+            std::cerr << "Invalid or repeated option: " << option
+                      << "; --partition requires 0 or 1, --history-id requires a nonempty ID.\n";
             return EXIT_FAILURE;
         }
+        else
+            break;
         argc -= 2;
     }
     if (argc > 6)
     {
-        std::cerr << "Usage: kv_server [persistence-file] [port] [idle-timeout-seconds] [standalone|primary|replica] [replica-port] [--history-id id]\n";
+        std::cerr << "Usage: kv_server [persistence-file] [port] [idle-timeout-seconds] [standalone|primary|replica] [replica-port] [--history-id id] [--partition 0|1]\n";
         return EXIT_FAILURE;
     }
 
@@ -692,7 +701,7 @@ int main(int argc, char *argv[])
     try
     {
 
-        return run_server(file_path, port, idle_timeout_seconds, role, replica_port, new_history_id);
+        return run_server(file_path, port, idle_timeout_seconds, role, replica_port, new_history_id, partition_id);
     }
     catch (const std::exception &error)
     {

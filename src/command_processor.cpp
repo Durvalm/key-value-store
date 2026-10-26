@@ -35,6 +35,9 @@ CommandResult process_command(const std::string &line, KeyValueStore &store,
     if (!parsed.error_response.empty())
         return {parsed.error_response, false};
 
+    if (!parsed.key.empty() && !store.owns_key(parsed.key))
+        return error_result("WRONG_PARTITION", "Key belongs to another partition");
+
     const std::string &command = parsed.name;
     const std::string &key = parsed.key;
     const std::string &value = parsed.value;

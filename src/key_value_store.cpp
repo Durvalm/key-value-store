@@ -1,4 +1,5 @@
 #include "key_value_store.h"
+#include "partition.h"
 
 #include <fstream>
 #include <sstream>
@@ -89,28 +90,44 @@ namespace
 
 // Construtor
 KeyValueStore::KeyValueStore(const std::string &file_path, bool numbered_history,
-                           const std::string &new_history_id)
-    : file_path_(file_path), numbered_history_(numbered_history)
+                           const std::string &new_history_id, int partition_id)
+    : file_path_(file_path), partition_id_(partition_id), numbered_history_(numbered_history)
 {
+    if (partition_id_ < -1 || partition_id_ > 1)
+        throw std::runtime_error("Partition ID must be 0 or 1");
     if (!new_history_id.empty() && (!numbered_history_ || !valid_history_id(new_history_id)))
         throw std::runtime_error("History ID requires numbered mode and 1-128 letters, digits, dots, underscores or hyphens");
 
     replay();
-    if (numbered_history_ && history_id_.empty())
+    const bool new_history = numbered_history_ && history_id_.empty();
+    if (new_history)
     {
         if (new_history_id.empty())
             throw std::runtime_error("New numbered history requires an explicit history ID (--history-id)");
         history_id_ = new_history_id;
-        open_log();
-        log_file_ << "HISTORY " << history_id_ << '\n';
-        log_file_.flush();
-        if (!log_file_)
-            throw std::runtime_error("Could not write history header");
-        return;
     }
     if (!new_history_id.empty() && history_id_ != new_history_id)
         throw std::runtime_error("Supplied history ID does not match the saved history ID");
+
     open_log();
+    if (partition_id_ != -1 && !partition_header_present_)
+        log_file_ << "PARTITION " << partition_id_ << " fnv1a64-mod2-v1\n";
+    if (new_history)
+        log_file_ << "HISTORY " << history_id_ << '\n';
+    log_file_.flush();
+    if (!log_file_)
+        throw std::runtime_error("Could not write log headers");
+}
+
+bool KeyValueStore::owns_key(const std::string &key) const
+{
+    return partition_id_ == -1 || partition_for_key(key) == static_cast<std::size_t>(partition_id_);
+}
+
+void KeyValueStore::require_owned_key(const std::string &key) const
+{
+    if (!owns_key(key))
+        throw std::runtime_error("Key belongs to another partition");
 }
 
 // Class Methods
@@ -119,6 +136,7 @@ void KeyValueStore::set(
     const std::string &value)
 {
     validate_field(key, "Key");
+    require_owned_key(key);
     validate_field(value, "Value");
 
     std::ostringstream record;
@@ -155,6 +173,7 @@ bool KeyValueStore::remove(
     const std::string &key)
 {
     validate_field(key, "Key");
+    require_owned_key(key);
 
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -251,6 +270,7 @@ std::uint64_t KeyValueStore::apply_replica_record(const std::string &record)
         throw std::runtime_error("Replicated command exceeds 4096 bytes");
     std::istringstream command_input(command_text);
     const Mutation mutation = read_mutation(command_input);
+    require_owned_key(mutation.key);
     const std::string command = mutation_command(mutation);
     const std::string canonical = std::to_string(sequence) + ' ' + command;
 
@@ -313,6 +333,9 @@ void KeyValueStore::compact()
     if (!tmp_file.is_open())
         throw std::runtime_error("Could not open compacted log");
 
+    if (partition_id_ != -1)
+        tmp_file << "PARTITION " << partition_id_ << " fnv1a64-mod2-v1\n";
+
     for (const auto &[key, value] : data_)
     {
         tmp_file << "SET "
@@ -374,6 +397,25 @@ void KeyValueStore::replay()
     std::size_t line_number = 0;
     std::string record;
 
+    // Partition metadata precedes HISTORY (if present) and is not a mutation.
+    if (log_file.peek() == 'P')
+    {
+        std::getline(log_file, record);
+        ++line_number;
+        std::istringstream header(record);
+        std::string marker, saved_partition, routing;
+        if (!log_file || log_file.eof() ||
+            !(header >> marker >> saved_partition >> routing) || !reached_end(header) ||
+            marker != "PARTITION" || partition_id_ == -1 ||
+            saved_partition != std::to_string(partition_id_) || routing != "fnv1a64-mod2-v1")
+            throw std::runtime_error("Partition log/configuration mismatch or malformed PARTITION header");
+        partition_header_present_ = true;
+        if (numbered_history_ && log_file.peek() == std::ifstream::traits_type::eof())
+            throw std::runtime_error("Partitioned numbered log is missing its HISTORY header");
+    }
+    else if (partition_id_ != -1 && log_file.peek() != std::ifstream::traits_type::eof())
+        throw std::runtime_error("Existing log has no PARTITION header; use a fresh partition log");
+
     if (numbered_history_ && log_file.peek() != std::ifstream::traits_type::eof())
     {
         std::getline(log_file, record);
@@ -408,6 +450,7 @@ void KeyValueStore::replay()
             if (numbered_history_ && read_sequence(input) != history_.size() + 1)
                 throw std::runtime_error("Nonconsecutive numbered history");
             const Mutation mutation = read_mutation(input);
+            require_owned_key(mutation.key);
             if (mutation.operation == "SET")
                 data_[mutation.key] = mutation.value;
             else

@@ -701,6 +701,81 @@ namespace
         }
         std::filesystem::remove(path);
     }
+    void test_partition_ownership()
+    {
+        const auto path = test_file("partition_ownership");
+        std::filesystem::remove(path);
+        const std::string header = "PARTITION 0 fnv1a64-mod2-v1\n";
+        {
+            KeyValueStore store(path.string(), false, "", 0);
+            expect(read_file(path) == header, "new partition log records its routing identity");
+            expect(store.owns_key("color") && !store.owns_key("full name"), "store uses the shared ownership rule");
+            expect(process_command("SET \"color\" \"blue\"", store).response == "OK\n", "owner accepts write");
+            const auto before = read_file(path);
+            for (const auto &command : {"SET \"full name\" \"Durval\"", "GET \"full name\"",
+                                       "DELETE \"full name\"", "EXISTS \"full name\""})
+            {
+                const auto result = process_command(command, store);
+                expect(result.response.starts_with("ERROR WRONG_PARTITION") && !result.mutation_applied,
+                       "every wrong-owner command is rejected");
+            }
+            expect(process_command("SET \"full name\"", store).response.starts_with("ERROR INVALID_ARGUMENT"),
+                   "syntax is checked before ownership");
+            expect_runtime_error([&]() { store.set("full name", "Durval"); }, "direct wrong-key mutation rejected");
+            expect(store.size() == 1 && read_file(path) == before, "rejection changes neither map nor log");
+            store.compact();
+            expect(read_file(path).starts_with(header), "compaction retains partition header");
+            store.set("color", "red");
+        }
+        {
+            KeyValueStore store(path.string(), false, "", 0);
+            expect(store.get("color") == "red", "partition state replays after compaction and append");
+        }
+        const auto before = read_file(path);
+        expect_runtime_error([&]() { KeyValueStore store(path.string(), false, "", 1); }, "wrong partition refuses saved log");
+        expect_runtime_error([&]() { KeyValueStore store(path.string()); }, "partition log requires explicit partition");
+        expect(read_file(path) == before, "wrong configuration leaves saved log untouched");
+
+        for (const auto &contents : {std::string("SET \"color\" \"blue\"\n"),
+                                    std::string("PARTITION 0 unknown-routing\n"),
+                                    std::string("PARTITION 0 fnv1a64-mod2-v1"),
+                                    header + "SET \"full name\" \"Durval\"\n"})
+        {
+            write_file(path, contents);
+            expect_runtime_error([&]() { KeyValueStore store(path.string(), false, "", 0); },
+                                 "incompatible, incomplete or wrong-key history is rejected");
+            expect(read_file(path) == contents, "rejected history remains untouched");
+        }
+        std::filesystem::remove(path);
+    }
+
+    void test_partition_numbered_history()
+    {
+        const auto path = test_file("partition_numbered");
+        std::filesystem::remove(path);
+        {
+            KeyValueStore store(path.string(), true, "group-1", 1);
+            expect(store.apply_replica_record("1 SET \"full name\" \"Durval\"") == 1, "peer applies owned key");
+            const auto before = read_file(path);
+            expect_runtime_error([&]() { store.apply_replica_record("2 SET \"color\" \"blue\""); },
+                                 "peer cannot bypass partition ownership");
+            expect(store.last_sequence() == 1 && read_file(path) == before, "wrong peer record does not advance history");
+            expect(store.apply_replica_record("2 SET \"full name\" \"updated\"") == 2, "valid peer progress still works");
+        }
+        {
+            KeyValueStore store(path.string(), true, "group-1", 1);
+            expect(store.last_sequence() == 2 && store.get("full name") == "updated", "partition and numbered replay compose");
+            expect(store.history_records()[0] == "1 SET \"full name\" \"Durval\"", "metadata is not a numbered mutation");
+            expect(store.apply_replica_record("1 SET \"full name\" \"Durval\"") == 1, "duplicate verification survives restart");
+        }
+        const auto before = read_file(path);
+        expect_runtime_error([&]() { KeyValueStore store(path.string(), true, "wrong-group", 1); }, "history ID still checked");
+        expect_runtime_error([&]() { KeyValueStore store(path.string(), true, "group-1", 0); }, "numbered log partition still checked");
+        expect(read_file(path) == before, "wrong partition/group does not append metadata");
+        write_file(path, "PARTITION 1 fnv1a64-mod2-v1\n");
+        expect_runtime_error([&]() { KeyValueStore store(path.string(), true, "group-1", 1); }, "missing HISTORY after partition fails");
+        std::filesystem::remove(path);
+    }
 } // namespace
 
 void test_contains()
@@ -718,6 +793,8 @@ void test_contains()
 
 int main()
 {
+    test_partition_ownership();
+    test_partition_numbered_history();
     test_history_header();
     test_numbered_history();
     test_invalid_numbered_history();

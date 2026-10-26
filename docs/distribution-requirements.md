@@ -153,13 +153,13 @@ separate fresh logs, each in its own terminal:
 ```sh
 # Terminal 1: partition 0
 partition_dir=$(mktemp -d)
-./build-release/kv_server "$partition_dir/store.log" 6380
+./build-release/kv_server "$partition_dir/store.log" 6380 --partition 0
 ```
 
 ```sh
 # Terminal 2: partition 1
 partition_dir=$(mktemp -d)
-./build-release/kv_server "$partition_dir/store.log" 6382
+./build-release/kv_server "$partition_dir/store.log" 6382 --partition 1
 ```
 
 ```sh
@@ -202,11 +202,10 @@ keys, overwrites, reads, existence, deletion, invalid/local commands, and a heal
 partition remaining usable after the other stops. Existing single-server and
 replication tests remain in place.
 
-This checkpoint changes only the client. Servers do not yet reject requests for
-keys owned by the other partition. Ownership enforcement and binding logs to the
-partition configuration belong to Step 3; replication groups follow afterward.
-Keep the same endpoint ordering when reusing logs: swapping ports changes where
-the client looks for existing data.
+Step 2 introduced client routing. Step 3 now also enforces server ownership when
+started with `--partition`, as in the commands above. Keep the same endpoint
+ordering when reusing logs: swapping ports sends requests to the wrong owner,
+which now rejects them rather than silently accepting misplaced data.
 
 ## Step 3: Make ownership an enforced server rule
 
@@ -233,6 +232,63 @@ Requirements:
 Manually changing configuration is not a supported membership change. Making an
 old key unreachable is data loss from the client's perspective even if its bytes
 still exist in a file.
+
+### Implemented checkpoint: server ownership
+
+Add `--partition 0` or `--partition 1` after the positional server arguments.
+The optional `--history-id` and `--partition` pairs may appear in either order.
+Without `--partition`, the server retains its previous unpartitioned behavior.
+
+The command processor validates syntax, checks the decoded key against the
+store's fixed partition identity, and only then executes the command. Wrong-owner
+SET, GET, DELETE, and EXISTS return:
+
+```text
+ERROR WRONG_PARTITION "Key belongs to another partition"
+```
+
+The connection stays usable; rejection changes neither map nor log. Commands
+without keys keep their existing single-node behavior. Replica client writes are
+still read-only, and the numbered peer protocol remains separate. Peer mutations
+and replayed records also validate ownership before applying any data.
+
+Fresh partition logs begin with an explicit routing identity:
+
+```text
+PARTITION 0 fnv1a64-mod2-v1
+```
+
+Numbered logs put their existing `HISTORY <id>` header next, followed by mutations
+starting at sequence 1. The partition header is not a numbered record and is not
+included in startup replication history. Standalone compaction preserves it.
+On restart, the configured partition and routing version must match the header;
+omitting the partition flag also fails. Every recovered key must belong here.
+The existing expected history-ID check still validates numbered group identity;
+use a distinct history ID for each pair and the same ID/partition on both members.
+This is configuration, not automatic discovery or authentication.
+
+Nonempty logs created before partition metadata cannot be opened with
+`--partition`. Keep those logs for their previous unpartitioned mode and use fresh
+files for this milestone. Automatic migration or adding headers to populated
+logs is deferred. Restart existing partitioned files with their original
+partition flag and, for replicated groups, expected history ID.
+
+To observe enforcement, connect directly to partition 1:
+
+```sh
+./build-release/kv_client 127.0.0.1 6382
+```
+
+```text
+SET "color" "blue"
+GET "color"
+```
+
+Both return WRONG_PARTITION because `color` belongs to partition 0. The tests
+cover wrong-node operations, unchanged logs, same-configuration restart, swapped
+or omitted partition identity, malformed routing headers, compaction, numbered
+replay/resends, and compatibility with a partitioned primary/replica pair.
+Full two-group restart/failure testing is still Steps 4–5.
 
 ## Step 4: Combine partitioning with replication
 
