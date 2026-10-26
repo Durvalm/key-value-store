@@ -44,6 +44,7 @@ add_executable(kv_benchmark
 )
 
 target_link_libraries(kv_benchmark PRIVATE Threads::Threads)
+target_link_libraries(kv_client PRIVATE kv_store)
 
 target_link_libraries(kv_cli
     PRIVATE
@@ -99,6 +100,12 @@ if(BUILD_TESTING)
     set_tests_properties(kv_server_integration_tests PROPERTIES
         TIMEOUT 30
     )
+
+    add_test(NAME kv_distribution_tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/kv_distribution_test.py
+            $<TARGET_FILE:kv_server> $<TARGET_FILE:kv_client>)
+    set_tests_properties(kv_distribution_tests PROPERTIES TIMEOUT 30)
 
     add_test(
         NAME kv_replication_tests

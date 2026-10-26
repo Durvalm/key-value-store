@@ -145,6 +145,69 @@ responses. A dashboard is unnecessary.
 
 **Checkpoint:** explain one routed SET and one GET before changing the servers.
 
+### Implemented checkpoint: client routing
+
+Build with `cmake --build build-release`. Start two standalone servers with
+separate fresh logs, each in its own terminal:
+
+```sh
+# Terminal 1: partition 0
+partition_dir=$(mktemp -d)
+./build-release/kv_server "$partition_dir/store.log" 6380
+```
+
+```sh
+# Terminal 2: partition 1
+partition_dir=$(mktemp -d)
+./build-release/kv_server "$partition_dir/store.log" 6382
+```
+
+```sh
+# Terminal 3: ports are ordered by partition ID, not discovered automatically.
+./build-release/kv_client --cluster 127.0.0.1 6380 6382
+```
+
+Try these commands (`color` belongs to partition 0; `full name` to partition 1):
+
+```text
+SET "color" "blue"
+SET "full name" "Durval"
+GET "color"
+GET "full name"
+EXISTS "color"
+DELETE "full name"
+EXIT
+```
+
+The client validates each command, hashes only its decoded key, opens a connection
+to the selected port, sends the original command, reads one response, and closes
+the connection. HELP and EXIT run locally. SIZE and COMPACT report unsupported;
+they do not accidentally operate on only one partition. Both ports currently use
+the same IPv4 address. The original single-server invocation is still available:
+`./build-release/kv_client 127.0.0.1 6380`.
+
+One connection per request deliberately avoids idle connections occupying server
+workers. It adds connection overhead; this client is for routing correctness, not
+the existing benchmark. Connection establishment waits at most five seconds;
+sends and receives use five-second socket timeouts. These are per-call I/O waits,
+not an absolute deadline against a peer that continually sends tiny fragments.
+
+A failed connection reports PARTITION_UNAVAILABLE. A failed exchange reports
+REQUEST_UNCONFIRMED because a write may already have been applied. No automatic
+retry occurs. The session continues so another partition can still be used, but
+its final process exit status records any connection/exchange failure.
+
+`kv_distribution_tests` launches two servers and checks routing, quoted and UTF-8
+keys, overwrites, reads, existence, deletion, invalid/local commands, and a healthy
+partition remaining usable after the other stops. Existing single-server and
+replication tests remain in place.
+
+This checkpoint changes only the client. Servers do not yet reject requests for
+keys owned by the other partition. Ownership enforcement and binding logs to the
+partition configuration belong to Step 3; replication groups follow afterward.
+Keep the same endpoint ordering when reusing logs: swapping ports changes where
+the client looks for existing data.
+
 ## Step 3: Make ownership an enforced server rule
 
 Client routing alone is a convention. A misconfigured client could send a write
