@@ -1,5 +1,4 @@
 #include "hash_ring.h"
-#include "partition.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -34,6 +33,26 @@ namespace
 
 int main()
 {
+    struct HashCase
+    {
+        std::string text;
+        std::uint64_t expected;
+    };
+    // Fixed vectors from a separate Python FNV + fmix64 calculation.
+    const HashCase hash_cases[] = {
+        {"", 0xefd01f60ba992926ULL},
+        {"a", 0x82a2a958a9bece5bULL},
+        {"group-0", 0x30eb621c7adc1a84ULL},
+        {"group-1", 0xe2cb74b56dcaa714ULL},
+        {"group-2", 0x17bc2111f64f5065ULL},
+        {"color", 0x9ddbe96d41032da8ULL},
+        {"full name", 0x915d7ac3e2af53f2ULL},
+        {"caf\xc3\xa9", 0xf50b1f8e2c0682e6ULL},
+        {std::string("prefix\0suffix", 13), 0x90c0abdc3ee773d1ULL},
+    };
+    for (const HashCase &test : hash_cases)
+        expect(ring_hash(test.text) == test.expected, "mixed hash matches fixed vector");
+
     const std::vector<RingEntry> before{{20, "group-0"}, {70, "group-1"}};
     const std::vector<RingEntry> after{{20, "group-0"}, {45, "group-2"}, {70, "group-1"}};
     for (std::uint64_t position : {0, 12, 20, 71, 85, 99})
@@ -61,10 +80,14 @@ int main()
     const auto reordered = build_ring({"group-2", "group-0", "group-1"});
     for (std::size_t i = 0; i < ring.size(); ++i)
     {
-        expect(ring[i].position == stable_key_hash(ring[i].group_id), "positions hash stable IDs");
+        expect(ring[i].position == ring_hash(ring[i].group_id), "positions use mixed hash of stable IDs");
         expect(ring[i].position == reordered[i].position && ring[i].group_id == reordered[i].group_id,
                "configuration order does not change ring");
     }
+    expect(ring[0].group_id == "group-2" && ring[1].group_id == "group-0" &&
+           ring[2].group_id == "group-1", "fixed mixed positions have expected order");
+    expect(group_for_key(ring, "color") == "group-1", "lookup uses mixed key hash");
+    expect(group_for_key(ring, "") == "group-2", "mixed key past last entry wraps");
     const auto smaller = build_ring({"group-0", "group-1"});
     for (std::size_t i = 0; i < 10000; ++i)
     {

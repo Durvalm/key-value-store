@@ -453,12 +453,13 @@ explicit migration is implemented. Do not point the new mapping at populated
 
 ### First experiment implemented
 
-`kv_partition_experiment` implements the sorted-list lookup and compares modulo
-with a one-position-per-group FNV ring over 10,000 fixed keys. The
-[experiment notes](hash-ring-experiment.md) show the code flow, captured output,
-and the severe imbalance observed with the current group hashes. This is an
-isolated ownership experiment; live routing and log formats are unchanged.
-Better-spread placement needs investigation before adopting a ring for migration.
+`kv_partition_experiment` implements sorted-list lookup and compares modulo
+with a one-position-per-group ring over 10,000 fixed keys. The ring now uses
+FNV-1a followed by fmix64 for both keys and group IDs. The
+[experiment notes](hash-ring-experiment.md) preserve the original clustered FNV
+baseline alongside the new mixed result: positions spread, movement decreases for
+this dataset, and substantial imbalance remains. Virtual nodes are the next
+separate experiment. Live routing and log formats are unchanged.
 
 ## 7B, Step 8: Implement a controlled offline rebalance
 

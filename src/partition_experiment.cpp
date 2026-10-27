@@ -8,7 +8,7 @@
 
 int main()
 {
-    // Small, manually chosen positions demonstrate the lookup, not FNV outputs.
+    // Small, manually chosen positions demonstrate lookup, not actual hashes.
     const std::vector<RingEntry> toy_before{{20, "group-0"}, {70, "group-1"}};
     const std::vector<RingEntry> toy_after{{20, "group-0"}, {45, "group-2"}, {70, "group-1"}};
     std::cout << "Toy lookup (illustrative positions):\n";
@@ -25,7 +25,7 @@ int main()
     const std::vector<std::string> ids{"group-0", "group-1", "group-2"};
     const auto before = build_ring({ids[0], ids[1]});
     const auto after = build_ring(ids);
-    std::cout << "Actual FNV-1a group positions (64-bit, decimal):\n";
+    std::cout << "Mixed FNV-1a + fmix64 group positions (64-bit, decimal):\n";
     for (const RingEntry &entry : after)
         std::cout << "  " << entry.group_id << ": " << entry.position << '\n';
 
@@ -72,6 +72,6 @@ int main()
               << " (" << 100.0 * modulo_moved / key_count << "%)\n"
               << "Ring moved: " << ring_moved << "/" << key_count
               << " (" << 100.0 * ring_moved / key_count << "%)\n\n"
-              << "The group hashes cluster together: one position per group is badly imbalanced here.\n"
+              << "One position per group can still be imbalanced; mixing is not a balance guarantee.\n"
               << "This is an ownership experiment, not live routing or data migration.\n";
 }

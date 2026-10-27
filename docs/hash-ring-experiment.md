@@ -24,9 +24,10 @@ modulo rule. Virtual nodes and migration are not implemented in this checkpoint.
 5. `src/partition_experiment.cpp`: compare ownership before and after insertion.
 
 Lookup uses a linear scan for this small experiment. A binary search is optional
-later. Ring positions are unsigned 64-bit FNV-1a hashes, reusing the existing
-stable helper. The example numbers 20, 45 and 70 are manually chosen teaching
-positions, not the actual hashes of the group IDs.
+later. `ring_hash` now runs the existing FNV-1a helper followed by the standard
+MurmurHash3 `fmix64` finalizer. Both keys and group IDs use this mixed 64-bit hash.
+The example numbers 20, 45 and 70 remain manually chosen teaching positions,
+not the actual hashes of the group IDs.
 
 At an exact position, that entry owns the key. Position collisions are sorted by
 group ID as a deterministic tie-break: only the first entry at that position owns
@@ -56,7 +57,7 @@ to 20. No keys move between the existing groups when inserting the new entry:
 a changed owner is always the newly added group. This describes ownership changes,
 not actual data transfers.
 
-## Real hash experiment: balance is not guaranteed
+## Baseline before mixing: balance is not guaranteed
 
 Captured 2026-10-27, using exactly 10,000 keys named `experiment-key-0` through
 `experiment-key-9999`, with the same FNV hash for both algorithms.
@@ -94,17 +95,62 @@ modulo uses remainders, whereas ring ownership depends on gaps across the full
 hash space. Neither less movement nor good balance is guaranteed for every
 particular ring and dataset.
 
+## Added mixing step: same keys, more spread, still unequal intervals
+
+The ring now uses the fixed experimental rule `fnv1a64-fmix64-v1`:
+
+```text
+Input string → original FNV-1a 64-bit hash → fmix64 → ring position
+```
+
+The finalizer is Austin Appleby's public-domain
+[fmix64 implementation](https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp).
+It applies XOR/right-shift operations and two fixed odd multipliers, with unsigned
+64-bit wrap-around. This spreads differences in the FNV result across its bits;
+it does not choose random positions, enforce equal loads, remove pre-existing FNV
+collisions, or provide cryptographic protection. This composition is not the full
+MurmurHash3 string-hashing algorithm.
+
+The original `stable_key_hash` and application routing remain unchanged. No new
+dependency, virtual-node setting, or live hash-selection option was added. Only
+experimental ring construction and key lookup call `ring_hash`. Its exact outputs
+are fixed by golden tests; changing the algorithm changes ownership.
+
+Captured 2026-10-27, rerunning the exact same group IDs and 10,000 keys:
+
+```text
+group-2: 1710278319524499557
+group-0: 3525019007807396484
+group-1: 16342283995423876884
+```
+
+| Strategy | group-0 keys | group-1 keys | group-2 keys |
+| --- | ---: | ---: | ---: |
+| Original modulo, two groups | 5,000 | 5,000 | Not present |
+| Original modulo, three groups | 3,333 | 3,333 | 3,334 |
+| Mixed ring, two groups | 3,119 | 6,881 | Not present |
+| Mixed ring, three groups | 999 | 6,881 | 2,120 |
+
+Modulo still changes 6,668 owners (66.68%). The mixed ring changes 2,120 owners
+(21.20%), all to the new group. Group-1 keeps its 6,881 keys; group-0 gives 2,120
+of its 3,119 keys to group-2. These percentages describe this dataset and these
+IDs, not a general movement guarantee. The experiment executable prints the
+current mixed result; the original raw-FNV baseline is preserved above.
+
+This fixes the observed near-identical positions without achieving equal balance:
+group-1 still owns about 69% of sampled keys because the gap before its position
+is large. Key counts measure storage ownership, not request popularity or CPU load.
+
 ## What to do next
 
-Keep this result as the baseline. Next investigate better-spread group positions
-with an appropriate stable hash/mixing choice, then optionally compare several
-positions per group (virtual nodes). Adding virtual nodes to a poorly spread hash
-is not automatically a cure. Measure both movement and key counts again; do not
-choose group IDs merely to obtain attractive output.
+Compare multiple positions per group (virtual nodes) while retaining the same IDs,
+keys, mixed hash, and lookup rule. Several smaller intervals per group can reduce
+the influence of one large gap. That is a separate next step; it is not included
+in this change, and improved mixing alone is not a guarantee of good balance.
 
 Only after defining and testing a suitable ownership rule should we connect it
-to migration. Existing modulo log headers remain unchanged, and these experiment
-positions must not be used to reopen those logs as though data had moved.
+to migration. Existing modulo log headers remain unchanged. Neither the old nor
+new experiment positions may be used to reopen those logs as though data had moved.
 
 ## Checks
 
@@ -112,7 +158,9 @@ positions must not be used to reopen those logs as though data had moved.
 ctest --test-dir build-release --output-on-failure
 ```
 
-The new ring test covers exact boundaries, wrap-around including the maximum
+The ring test fixes full mixed-hash outputs, including UTF-8 and embedded NUL
+bytes, and checks known group/key mappings. It also covers exact boundaries,
+wrap-around including the maximum
 64-bit value, insertion/removal locality, input ordering, single-group lookup,
 invalid membership and the collision tie rule. Existing hash vectors and live
 store/network/replication tests also continue to pass.

@@ -4,6 +4,19 @@
 #include <algorithm>
 #include <stdexcept>
 
+std::uint64_t ring_hash(const std::string &text)
+{
+    std::uint64_t hash = stable_key_hash(text);
+    // fmix64 mixes differences across the output bits. Unsigned products wrap.
+    // Austin Appleby, public domain: github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccdULL;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53ULL;
+    hash ^= hash >> 33;
+    return hash;
+}
+
 std::vector<RingEntry> build_ring(const std::vector<std::string> &group_ids)
 {
     if (group_ids.empty())
@@ -17,7 +30,7 @@ std::vector<RingEntry> build_ring(const std::vector<std::string> &group_ids)
         for (const RingEntry &entry : ring)
             if (entry.group_id == id)
                 throw std::invalid_argument("Duplicate group ID");
-        ring.push_back({stable_key_hash(id), id});
+        ring.push_back({ring_hash(id), id});
     }
     std::sort(ring.begin(), ring.end(), [](const RingEntry &a, const RingEntry &b)
     {
@@ -40,5 +53,5 @@ std::string group_for_position(const std::vector<RingEntry> &ring, std::uint64_t
 
 std::string group_for_key(const std::vector<RingEntry> &ring, const std::string &key)
 {
-    return group_for_position(ring, stable_key_hash(key));
+    return group_for_position(ring, ring_hash(key));
 }
