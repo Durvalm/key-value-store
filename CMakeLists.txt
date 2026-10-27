@@ -43,7 +43,7 @@ add_executable(kv_benchmark
     src/benchmark_main.cpp
 )
 
-target_link_libraries(kv_benchmark PRIVATE Threads::Threads)
+target_link_libraries(kv_benchmark PRIVATE kv_store)
 target_link_libraries(kv_client PRIVATE kv_store)
 
 target_link_libraries(kv_cli

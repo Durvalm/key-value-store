@@ -421,6 +421,11 @@ capacity. Keep routing, connection setup, and startup timing boundaries explicit
 Record per-group request counts to reveal skew; no speedup is an acceptable result.
 Do not blame replication for routing costs or compare unlike success contracts.
 
+The [fixed-partition results](distribution-results.md) record the completed local
+comparison and existing correctness evidence. The benchmark now supports
+`--cluster <primary-0-port> <primary-1-port> [GET|SET|VERIFY]`, using two persistent
+connections with explicit per-group measured request counts.
+
 **7A is complete** when two fixed replicated groups own disjoint keys, routing
 survives restart, failure stays visible and isolated, and you can explain which
 guarantees apply to one key versus the whole cluster. Stop here for a review before

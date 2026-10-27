@@ -1,3 +1,5 @@
+#include "partition.h"
+
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -118,29 +120,34 @@ namespace
     }
 
     // Read-only check: also usable after restarting the server with the SET log.
-    void verify_set_values(int socket, std::string &pending)
+    void verify_set_values(const std::vector<int> &sockets, bool partitioned)
     {
+        std::vector<std::string> pending(sockets.size());
         for (std::size_t i = 0; i < key_count; ++i)
         {
             const std::string key = "benchmark-key-" + std::to_string(i);
+            const std::size_t owner = partitioned ? partition_for_key(key) : 0;
+            const int socket = sockets[owner];
             const std::string value = "benchmark-write-" + std::to_string(i);
             send_all(socket, "GET \"" + key + "\"\n");
-            if (receive_line(socket, pending) != "VALUE \"" + value + "\"\n")
+            if (receive_line(socket, pending[owner]) != "VALUE \"" + value + "\"\n")
                 throw std::runtime_error("Final SET value mismatch for " + key);
         }
     }
 
-    void prepare_requests(int socket, const std::string &workload,
+    void prepare_requests(const std::vector<int> &sockets, bool partitioned, const std::string &workload,
                           std::vector<std::string> &requests,
                           std::vector<std::string> &expected)
     {
-        std::string pending;
+        std::vector<std::string> pending(sockets.size());
         for (std::size_t i = 0; i < key_count; ++i)
         {
             const std::string key = "benchmark-key-" + std::to_string(i);
             const std::string value = "benchmark-value-" + std::to_string(i);
+            const std::size_t owner = partitioned ? partition_for_key(key) : 0;
+            const int socket = sockets[owner];
             send_all(socket, "SET \"" + key + "\" \"" + value + "\"\n");
-            if (receive_line(socket, pending) != "OK\n")
+            if (receive_line(socket, pending[owner]) != "OK\n")
                 throw std::runtime_error("Key preparation failed");
             if (workload == "SET")
             {
@@ -156,21 +163,30 @@ namespace
         }
     }
 
-    void benchmark(const std::vector<int> &sockets, const std::string &workload)
+    void benchmark(const std::vector<int> &sockets, const std::string &workload, bool partitioned)
     {
         const std::size_t count = sockets.size();
-        const std::size_t keys_per_client = key_count / count;
         const std::size_t requests_per_client = request_count / count;
         std::vector<std::string> requests;
         std::vector<std::string> expected;
-        prepare_requests(sockets[0], workload, requests, expected);
+        prepare_requests(sockets, partitioned, workload, requests, expected);
+        // Use identical per-client key schedules for one-group and two-group runs.
+        std::array<std::vector<std::size_t>, 2> key_indices;
+        for (std::size_t i = 0; i < key_count; ++i)
+        {
+            const std::string key = "benchmark-key-" + std::to_string(i);
+            key_indices[count == 2 ? partition_for_key(key) : 0].push_back(i);
+        }
+        for (std::size_t client = 0; client < count; ++client)
+            if (key_indices[client].size() != key_count / count)
+                throw std::runtime_error("Benchmark keys must be evenly split across clients");
 
         for (std::size_t client = 0; client < count; ++client)
         {
             std::string pending;
             for (std::size_t i = 0; i < warmup_count / count; ++i)
             {
-                const std::size_t index = client * keys_per_client + i % keys_per_client;
+                const std::size_t index = key_indices[client][i % key_indices[client].size()];
                 send_all(sockets[client], requests[index]);
                 if (receive_line(sockets[client], pending) != expected[index])
                     throw std::runtime_error("Unexpected response during warm-up");
@@ -199,7 +215,7 @@ namespace
                     {
                         for (std::size_t i = 0; i < requests_per_client; ++i)
                         {
-                            const std::size_t index = client * keys_per_client + i % keys_per_client;
+                            const std::size_t index = key_indices[client][i % key_indices[client].size()];
                             const auto request_start = Clock::now();
                             send_all(sockets[client], requests[index]);
                             const std::string response = receive_line(sockets[client], pending);
@@ -242,10 +258,7 @@ namespace
         }
         const double seconds = std::chrono::duration<double>(last_finished - start).count();
         if (workload == "SET")
-        {
-            std::string pending;
-            verify_set_values(sockets[0], pending);
-        }
+            verify_set_values(sockets, partitioned);
         std::sort(latencies.begin(), latencies.end());
         const double median = (latencies[request_count / 2 - 1] + latencies[request_count / 2]) / 2;
         const std::size_t p95_rank = (95 * request_count + 99) / 100;
@@ -257,6 +270,11 @@ namespace
                   << "Throughput (requests/s): " << request_count / seconds << '\n'
                   << "Median latency (us): " << median << '\n'
                   << "p95 latency (us, nearest rank): " << latencies[p95_rank - 1] << '\n';
+        std::cout << "Replication groups: " << (partitioned ? 2 : 1)
+                  << "; persistent connections; setup excluded from timing\n";
+        for (std::size_t group = 0; group < (partitioned ? 2u : 1u); ++group)
+            std::cout << "Group " << group << " measured requests: "
+                      << (partitioned ? requests_per_client : request_count) << '\n';
     }
 
 }
@@ -267,40 +285,49 @@ int main(int argc, char *argv[])
     std::vector<int> sockets;
     try
     {
-        if (argc > 4)
-            throw std::runtime_error("Usage: kv_benchmark [port] [GET|SET|VERIFY] [1|2]");
-        const std::string text = argc >= 2 ? argv[1] : "6380";
-        const std::string workload = argc >= 3 ? argv[2] : "GET";
-        const std::string count_text = argc == 4 ? argv[3] : "1";
+        const bool partitioned = argc >= 2 && std::string(argv[1]) == "--cluster";
+        if ((!partitioned && argc > 4) || (partitioned && (argc < 4 || argc > 5)))
+            throw std::runtime_error("Usage: kv_benchmark [port] [GET|SET|VERIFY] [1|2] or --cluster <port0> <port1> [GET|SET|VERIFY]");
+        const std::string workload = partitioned ? (argc == 5 ? argv[4] : "GET")
+                                                 : (argc >= 3 ? argv[2] : "GET");
+        const std::string count_text = partitioned ? "2" : (argc == 4 ? argv[3] : "1");
         if (count_text != "1" && count_text != "2")
             throw std::runtime_error("Client count must be 1 or 2");
         const std::size_t client_count = count_text == "2" ? 2 : 1;
         if (workload != "GET" && workload != "SET" && workload != "VERIFY")
             throw std::runtime_error("Workload must be GET, SET, or VERIFY");
-        if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
-            throw std::runtime_error("Port must be an integer from 1 to 65535");
-        const unsigned long port = std::stoul(text);
-        if (port == 0 || port > 65535)
-            throw std::runtime_error("Port must be an integer from 1 to 65535");
+        std::vector<unsigned short> ports;
+        for (std::size_t client = 0; client < client_count; ++client)
+        {
+            const std::string text = partitioned ? argv[2 + client] : (argc >= 2 ? argv[1] : "6380");
+            if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
+                throw std::runtime_error("Port must be an integer from 1 to 65535");
+            const unsigned long port = std::stoul(text);
+            if (port == 0 || port > 65535)
+                throw std::runtime_error("Port must be an integer from 1 to 65535");
+            ports.push_back(static_cast<unsigned short>(port));
+        }
+        if (partitioned && ports[0] == ports[1])
+            throw std::runtime_error("Partition ports must be distinct");
         if (::signal(SIGPIPE, SIG_IGN) == SIG_ERR)
             fail("signal");
-        // VERIFY needs only one connection, even for a two-client SET log.
-        sockets.resize(workload == "VERIFY" ? 1 : client_count, -1);
-        for (int &socket : sockets)
+        // VERIFY needs one connection per group, regardless of earlier client count.
+        sockets.resize(workload == "VERIFY" && !partitioned ? 1 : client_count, -1);
+        for (std::size_t client = 0; client < sockets.size(); ++client)
         {
+            int &socket = sockets[client];
             socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             if (socket == -1)
                 fail("socket");
-            connect_to_server(socket, static_cast<unsigned short>(port));
+            connect_to_server(socket, ports[client]);
         }
         if (workload == "VERIFY")
         {
-            std::string pending;
-            verify_set_values(sockets[0], pending);
+            verify_set_values(sockets, partitioned);
             std::cout << "Verified final SET values for " << key_count << " keys (read-only).\n";
         }
         else
-            benchmark(sockets, workload);
+            benchmark(sockets, workload, partitioned);
         for (int &socket : sockets)
             ::close(socket);
         return 0;

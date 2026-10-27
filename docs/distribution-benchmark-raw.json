@@ -1,0 +1,862 @@
+{
+  "recorded_at": "2026-10-26T22:48:53.861226-04:00",
+  "base_commit": "080a2589b59e1139b2c3b661ea25ee497627966b",
+  "working_tree_diff_stat": "CMakeLists.txt         |  2 +-\n src/benchmark_main.cpp | 89 ++++++++++++++++++++++++++++++++------------------\n 2 files changed, 59 insertions(+), 32 deletions(-)",
+  "environment": {
+    "os": "macOS-10.16-x86_64-i386-64bit",
+    "cpu": "Apple M3 Pro",
+    "logical_cpus": "11",
+    "memory_bytes": "19327352832",
+    "compiler": "Apple clang version 15.0.0 (clang-1500.1.0.2.5)\nTarget: x86_64-apple-darwin23.1.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+    "cmake": "cmake version 4.1.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake)."
+  },
+  "protocol": "Two closed-loop clients, persistent sockets, 100000 measured requests, 100 keys, 100 warm-up requests; 100 untimed preparation SETs; fresh processes/logs per run.",
+  "runs": [
+    {
+      "trial": 1,
+      "groups": 1,
+      "workload": "GET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-sz02iiq2/replica-0.log",
+          "53167",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-1-1-0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-sz02iiq2/primary-0.log",
+          "53166",
+          "120",
+          "primary",
+          "53167",
+          "--history-id",
+          "bench-get-1-1-0"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "53166",
+        "GET",
+        "2"
+      ],
+      "stdout": "Workload: GET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 0.931\nThroughput (requests/s): 107453.330\nMedian latency (us): 17.833\np95 latency (us, nearest rank): 24.750\nReplication groups: 1; persistent connections; setup excluded from timing\nGroup 0 measured requests: 100000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 0.931,
+        "Throughput (requests/s)": 107453.33,
+        "Median latency (us)": 17.833,
+        "p95 latency (us, nearest rank)": 24.75
+      },
+      "replica_verification_stdout": null,
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 100000,
+          "distinct_keys": 100,
+          "mutation_records": 100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 4696,
+          "log_sha256": "cbf81ae591667b29126f73a192a2b1f4b4a7f322c19bafddf53bc69f6dcb9f12"
+        }
+      ]
+    },
+    {
+      "trial": 1,
+      "groups": 2,
+      "workload": "GET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-aio1n951/replica-0.log",
+          "53178",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-2-1-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-aio1n951/primary-0.log",
+          "53176",
+          "120",
+          "primary",
+          "53178",
+          "--history-id",
+          "bench-get-2-1-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-aio1n951/replica-1.log",
+          "53179",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-2-1-1",
+          "--partition",
+          "1"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-aio1n951/primary-1.log",
+          "53177",
+          "120",
+          "primary",
+          "53179",
+          "--history-id",
+          "bench-get-2-1-1",
+          "--partition",
+          "1"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "--cluster",
+        "53176",
+        "53177",
+        "GET"
+      ],
+      "stdout": "Workload: GET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 0.933\nThroughput (requests/s): 107148.650\nMedian latency (us): 18.000\np95 latency (us, nearest rank): 24.375\nReplication groups: 2; persistent connections; setup excluded from timing\nGroup 0 measured requests: 50000\nGroup 1 measured requests: 50000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 0.933,
+        "Throughput (requests/s)": 107148.65,
+        "Median latency (us)": 18.0,
+        "p95 latency (us, nearest rank)": 24.375
+      },
+      "replica_verification_stdout": null,
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2383,
+          "log_sha256": "35f11ac7acc290760daf6f9096e2884da6190014c34b84a18cee42b2e9088475"
+        },
+        {
+          "group": 1,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2383,
+          "log_sha256": "9be6b141de1b4a2e864eb7cc25e94f1eb8abbed50e27c5aca22a10995743bd31"
+        }
+      ]
+    },
+    {
+      "trial": 2,
+      "groups": 2,
+      "workload": "GET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-59od6g91/replica-0.log",
+          "53194",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-2-2-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-59od6g91/primary-0.log",
+          "53192",
+          "120",
+          "primary",
+          "53194",
+          "--history-id",
+          "bench-get-2-2-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-59od6g91/replica-1.log",
+          "53195",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-2-2-1",
+          "--partition",
+          "1"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-59od6g91/primary-1.log",
+          "53193",
+          "120",
+          "primary",
+          "53195",
+          "--history-id",
+          "bench-get-2-2-1",
+          "--partition",
+          "1"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "--cluster",
+        "53192",
+        "53193",
+        "GET"
+      ],
+      "stdout": "Workload: GET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 0.904\nThroughput (requests/s): 110643.820\nMedian latency (us): 17.666\np95 latency (us, nearest rank): 23.375\nReplication groups: 2; persistent connections; setup excluded from timing\nGroup 0 measured requests: 50000\nGroup 1 measured requests: 50000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 0.904,
+        "Throughput (requests/s)": 110643.82,
+        "Median latency (us)": 17.666,
+        "p95 latency (us, nearest rank)": 23.375
+      },
+      "replica_verification_stdout": null,
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2383,
+          "log_sha256": "addc1ba6053185e80046f44f6eb4c3b52e2c0c5eeadbdbe5d862212d3520523b"
+        },
+        {
+          "group": 1,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2383,
+          "log_sha256": "127b04971039d6ff8c7e96edd1d98807bcd9be9727bb0f7b11d42ce80cccfa08"
+        }
+      ]
+    },
+    {
+      "trial": 2,
+      "groups": 1,
+      "workload": "GET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-a5lv2tq0/replica-0.log",
+          "53209",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-1-2-0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-a5lv2tq0/primary-0.log",
+          "53208",
+          "120",
+          "primary",
+          "53209",
+          "--history-id",
+          "bench-get-1-2-0"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "53208",
+        "GET",
+        "2"
+      ],
+      "stdout": "Workload: GET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 0.892\nThroughput (requests/s): 112161.933\nMedian latency (us): 17.375\np95 latency (us, nearest rank): 23.833\nReplication groups: 1; persistent connections; setup excluded from timing\nGroup 0 measured requests: 100000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 0.892,
+        "Throughput (requests/s)": 112161.933,
+        "Median latency (us)": 17.375,
+        "p95 latency (us, nearest rank)": 23.833
+      },
+      "replica_verification_stdout": null,
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 100000,
+          "distinct_keys": 100,
+          "mutation_records": 100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 4696,
+          "log_sha256": "b3d0ad8c929ad9a713b5ed51ad077655595fc85d41c5737b571b8ceaac4d92db"
+        }
+      ]
+    },
+    {
+      "trial": 3,
+      "groups": 1,
+      "workload": "GET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-e5t3rj3l/replica-0.log",
+          "53218",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-1-3-0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-e5t3rj3l/primary-0.log",
+          "53217",
+          "120",
+          "primary",
+          "53218",
+          "--history-id",
+          "bench-get-1-3-0"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "53217",
+        "GET",
+        "2"
+      ],
+      "stdout": "Workload: GET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 0.913\nThroughput (requests/s): 109545.058\nMedian latency (us): 17.625\np95 latency (us, nearest rank): 24.209\nReplication groups: 1; persistent connections; setup excluded from timing\nGroup 0 measured requests: 100000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 0.913,
+        "Throughput (requests/s)": 109545.058,
+        "Median latency (us)": 17.625,
+        "p95 latency (us, nearest rank)": 24.209
+      },
+      "replica_verification_stdout": null,
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 100000,
+          "distinct_keys": 100,
+          "mutation_records": 100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 4696,
+          "log_sha256": "593e93092b5e63d5ea89a30e0dbb07bdc70b97901408d1d05753db9bc2a8b1ef"
+        }
+      ]
+    },
+    {
+      "trial": 3,
+      "groups": 2,
+      "workload": "GET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-aukhkynr/replica-0.log",
+          "53228",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-2-3-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-aukhkynr/primary-0.log",
+          "53226",
+          "120",
+          "primary",
+          "53228",
+          "--history-id",
+          "bench-get-2-3-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-aukhkynr/replica-1.log",
+          "53229",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-get-2-3-1",
+          "--partition",
+          "1"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-aukhkynr/primary-1.log",
+          "53227",
+          "120",
+          "primary",
+          "53229",
+          "--history-id",
+          "bench-get-2-3-1",
+          "--partition",
+          "1"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "--cluster",
+        "53226",
+        "53227",
+        "GET"
+      ],
+      "stdout": "Workload: GET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 0.900\nThroughput (requests/s): 111063.338\nMedian latency (us): 17.584\np95 latency (us, nearest rank): 23.458\nReplication groups: 2; persistent connections; setup excluded from timing\nGroup 0 measured requests: 50000\nGroup 1 measured requests: 50000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 0.9,
+        "Throughput (requests/s)": 111063.338,
+        "Median latency (us)": 17.584,
+        "p95 latency (us, nearest rank)": 23.458
+      },
+      "replica_verification_stdout": null,
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2383,
+          "log_sha256": "67bf9eab58e571e1fa76814b716cc768cc7032e03d3634a1c15de1ef620aa656"
+        },
+        {
+          "group": 1,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2383,
+          "log_sha256": "2b3e0f2bfb431308410ffcd154748dd3bedf3afc82526613b0b460d205fc768a"
+        }
+      ]
+    },
+    {
+      "trial": 1,
+      "groups": 1,
+      "workload": "SET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-ij2q7_zq/replica-0.log",
+          "53243",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-1-1-0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-ij2q7_zq/primary-0.log",
+          "53242",
+          "120",
+          "primary",
+          "53243",
+          "--history-id",
+          "bench-set-1-1-0"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "53242",
+        "SET",
+        "2"
+      ],
+      "stdout": "Workload: SET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 3.258\nThroughput (requests/s): 30694.762\nMedian latency (us): 63.625\np95 latency (us, nearest rank): 74.083\nReplication groups: 1; persistent connections; setup excluded from timing\nGroup 0 measured requests: 100000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 3.258,
+        "Throughput (requests/s)": 30694.762,
+        "Median latency (us)": 63.625,
+        "p95 latency (us, nearest rank)": 74.083
+      },
+      "replica_verification_stdout": "Verified final SET values for 100 keys (read-only).\n",
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 100000,
+          "distinct_keys": 100,
+          "mutation_records": 100200,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 4979079,
+          "log_sha256": "256632c8bfe7023b6916f076c59a0129982d9d0682db9adcd00f71dc66e3b7b5"
+        }
+      ]
+    },
+    {
+      "trial": 1,
+      "groups": 2,
+      "workload": "SET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-1okchdqn/replica-0.log",
+          "53256",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-2-1-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-1okchdqn/primary-0.log",
+          "53253",
+          "120",
+          "primary",
+          "53256",
+          "--history-id",
+          "bench-set-2-1-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-1okchdqn/replica-1.log",
+          "53257",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-2-1-1",
+          "--partition",
+          "1"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-1okchdqn/primary-1.log",
+          "53255",
+          "120",
+          "primary",
+          "53257",
+          "--history-id",
+          "bench-set-2-1-1",
+          "--partition",
+          "1"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "--cluster",
+        "53253",
+        "53255",
+        "SET"
+      ],
+      "stdout": "Workload: SET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 2.408\nThroughput (requests/s): 41525.880\nMedian latency (us): 47.125\np95 latency (us, nearest rank): 55.709\nReplication groups: 2; persistent connections; setup excluded from timing\nGroup 0 measured requests: 50000\nGroup 1 measured requests: 50000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 2.408,
+        "Throughput (requests/s)": 41525.88,
+        "Median latency (us)": 47.125,
+        "p95 latency (us, nearest rank)": 55.709
+      },
+      "replica_verification_stdout": "Verified final SET values for 100 keys (read-only).\n",
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2483926,
+          "log_sha256": "8fb375ce438f92d6253a2585a3c8da951d8ae9f65f1a356b02731a049de8b7fa"
+        },
+        {
+          "group": 1,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2483926,
+          "log_sha256": "052e27c83a608cf0490ffbab212ba864a3e75e3f6afa9b86973965bfc7111021"
+        }
+      ]
+    },
+    {
+      "trial": 2,
+      "groups": 2,
+      "workload": "SET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-i3p3vo_s/replica-0.log",
+          "53274",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-2-2-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-i3p3vo_s/primary-0.log",
+          "53272",
+          "120",
+          "primary",
+          "53274",
+          "--history-id",
+          "bench-set-2-2-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-i3p3vo_s/replica-1.log",
+          "53275",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-2-2-1",
+          "--partition",
+          "1"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-i3p3vo_s/primary-1.log",
+          "53273",
+          "120",
+          "primary",
+          "53275",
+          "--history-id",
+          "bench-set-2-2-1",
+          "--partition",
+          "1"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "--cluster",
+        "53272",
+        "53273",
+        "SET"
+      ],
+      "stdout": "Workload: SET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 2.410\nThroughput (requests/s): 41491.272\nMedian latency (us): 46.750\np95 latency (us, nearest rank): 55.250\nReplication groups: 2; persistent connections; setup excluded from timing\nGroup 0 measured requests: 50000\nGroup 1 measured requests: 50000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 2.41,
+        "Throughput (requests/s)": 41491.272,
+        "Median latency (us)": 46.75,
+        "p95 latency (us, nearest rank)": 55.25
+      },
+      "replica_verification_stdout": "Verified final SET values for 100 keys (read-only).\n",
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2483926,
+          "log_sha256": "dc4174587e444f8f50c4dcb99c6a2b7f605eebfeac8415610cbbe0ce2646da3a"
+        },
+        {
+          "group": 1,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2483926,
+          "log_sha256": "7495114da809613d12f17439501b064592c1b09334932a92a365b5031310f41a"
+        }
+      ]
+    },
+    {
+      "trial": 2,
+      "groups": 1,
+      "workload": "SET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-arwwqb83/replica-0.log",
+          "53292",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-1-2-0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-arwwqb83/primary-0.log",
+          "53291",
+          "120",
+          "primary",
+          "53292",
+          "--history-id",
+          "bench-set-1-2-0"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "53291",
+        "SET",
+        "2"
+      ],
+      "stdout": "Workload: SET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 3.261\nThroughput (requests/s): 30661.355\nMedian latency (us): 64.208\np95 latency (us, nearest rank): 73.375\nReplication groups: 1; persistent connections; setup excluded from timing\nGroup 0 measured requests: 100000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 3.261,
+        "Throughput (requests/s)": 30661.355,
+        "Median latency (us)": 64.208,
+        "p95 latency (us, nearest rank)": 73.375
+      },
+      "replica_verification_stdout": "Verified final SET values for 100 keys (read-only).\n",
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 100000,
+          "distinct_keys": 100,
+          "mutation_records": 100200,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 4979079,
+          "log_sha256": "527e2586d93912ddf547524ecca8c4d93a0730780f105b9b3522fad78b139211"
+        }
+      ]
+    },
+    {
+      "trial": 3,
+      "groups": 1,
+      "workload": "SET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-skcahohe/replica-0.log",
+          "53302",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-1-3-0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-skcahohe/primary-0.log",
+          "53301",
+          "120",
+          "primary",
+          "53302",
+          "--history-id",
+          "bench-set-1-3-0"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "53301",
+        "SET",
+        "2"
+      ],
+      "stdout": "Workload: SET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 3.237\nThroughput (requests/s): 30895.860\nMedian latency (us): 63.916\np95 latency (us, nearest rank): 72.750\nReplication groups: 1; persistent connections; setup excluded from timing\nGroup 0 measured requests: 100000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 3.237,
+        "Throughput (requests/s)": 30895.86,
+        "Median latency (us)": 63.916,
+        "p95 latency (us, nearest rank)": 72.75
+      },
+      "replica_verification_stdout": "Verified final SET values for 100 keys (read-only).\n",
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 100000,
+          "distinct_keys": 100,
+          "mutation_records": 100200,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 4979079,
+          "log_sha256": "95c1d7535a5f494efbc14012cff301b4b43d71bbc99d78d61b291a3d6c9bdbd6"
+        }
+      ]
+    },
+    {
+      "trial": 3,
+      "groups": 2,
+      "workload": "SET",
+      "server_commands": [
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-qf0kv5as/replica-0.log",
+          "53314",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-2-3-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-qf0kv5as/primary-0.log",
+          "53312",
+          "120",
+          "primary",
+          "53314",
+          "--history-id",
+          "bench-set-2-3-0",
+          "--partition",
+          "0"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-qf0kv5as/replica-1.log",
+          "53315",
+          "120",
+          "replica",
+          "--history-id",
+          "bench-set-2-3-1",
+          "--partition",
+          "1"
+        ],
+        [
+          "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_server",
+          "/var/folders/n9/b447sycs50sdvmzxnkywbtf40000gr/T/kv-distribution-bench-qf0kv5as/primary-1.log",
+          "53313",
+          "120",
+          "primary",
+          "53315",
+          "--history-id",
+          "bench-set-2-3-1",
+          "--partition",
+          "1"
+        ]
+      ],
+      "benchmark_command": [
+        "/Users/Durval/life-os/subjects/cs-fundamentals-learnings/key-value-store/build-release/kv_benchmark",
+        "--cluster",
+        "53312",
+        "53313",
+        "SET"
+      ],
+      "stdout": "Workload: SET, 2 client(s), 100 total keys, 100 total warm-up requests\nCompleted requests: 100000\nTotal duration (s): 2.385\nThroughput (requests/s): 41927.982\nMedian latency (us): 46.875\np95 latency (us, nearest rank): 55.417\nReplication groups: 2; persistent connections; setup excluded from timing\nGroup 0 measured requests: 50000\nGroup 1 measured requests: 50000\n",
+      "stderr": "",
+      "metrics": {
+        "Total duration (s)": 2.385,
+        "Throughput (requests/s)": 41927.982,
+        "Median latency (us)": 46.875,
+        "p95 latency (us, nearest rank)": 55.417
+      },
+      "replica_verification_stdout": "Verified final SET values for 100 keys (read-only).\n",
+      "log_checks": [
+        {
+          "group": 0,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2483926,
+          "log_sha256": "f00f96f362f1f476539d89a391b1b884ef90de975a4af20abe3739c69f589e87"
+        },
+        {
+          "group": 1,
+          "measured_requests": 50000,
+          "distinct_keys": 50,
+          "mutation_records": 50100,
+          "matching_primary_replica_logs": true,
+          "log_bytes": 2483926,
+          "log_sha256": "3be886ba807dd3239ed557bad0a374b2b118eefef92dc9ee8feb9b621921fa81"
+        }
+      ]
+    }
+  ]
+}
