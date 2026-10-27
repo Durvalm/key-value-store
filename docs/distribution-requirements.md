@@ -378,6 +378,22 @@ C++ test style for pure routing/parser logic and the current Python harness for
 process/network scenarios. Reuse isolated files, selected ports, finite waits,
 and reliable cleanup. Existing Phase 6 suites must continue to pass.
 
+### Implemented check: concurrent clients and full restart
+
+`kv_distribution_tests` runs two routing-client processes, with a test barrier
+releasing their launches together. Each sends 100 writes: first to separate
+partitions, then to the same key on partition 0. It checks every response, exact
+mutation contents/counts, consecutive sequence numbers, each client's write order,
+and byte-for-byte matching primary/replica logs. It accepts either client's final
+value for the shared key; scheduling does not guarantee which client writes last
+or any particular interleaving.
+
+The test reads final values from both primaries and replicas, stops all four
+servers, and restarts both groups using their original logs and identities.
+Values and logs must survive unchanged. One additional write to each group must
+replicate with the next sequence number. This is a correctness test, not a
+throughput measurement or proof that every possible thread interleaving is safe.
+
 Acceptance checks for 7A:
 
 - Stable routing test vectors and identical client/server ownership results.

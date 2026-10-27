@@ -1,7 +1,9 @@
-"""Exercise partition routing, ownership, and replicated failure isolation."""
+"""Exercise partition routing, ownership, replication, and concurrent clients."""
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from kv_server_integration_test import (
@@ -127,6 +129,118 @@ def test_replicated_failure_isolation(server_executable, client_executable):
                 stop_server(server)
 
 
+def test_concurrent_replicated_clients(server_executable, client_executable):
+    ports = []
+    while len(ports) < 4:
+        port = choose_port()
+        if port not in ports:
+            ports.append(port)
+    primary_ports, replica_ports = ports[:2], ports[2:]
+    arguments = [str(client_executable), '--cluster', SERVER_HOST,
+                 *map(str, primary_ports)]
+    request_count = 100
+    keys = ['color', 'full name']  # Owners 0 and 1.
+
+    def run_writers(writer_keys, labels):
+        # Both test threads wait here before launching their client processes.
+        # Scheduling is nondeterministic; no particular interleaving is required.
+        start = threading.Barrier(2)
+
+        def write(key, label):
+            commands = ''.join(f'SET "{key}" "{label}-{i}"\n' for i in range(request_count))
+            start.wait(timeout=5)
+            result = subprocess.run(arguments, input=commands + 'EXIT\n', text=True,
+                                    capture_output=True, timeout=15)
+            assert result.returncode == 0, result.stderr
+            assert result.stdout.splitlines() == ['OK'] * request_count + ['BYE'], result.stdout
+
+        # The context joins both test threads, including when a client fails.
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            futures = [workers.submit(write, key, label)
+                       for key, label in zip(writer_keys, labels)]
+            for future in futures:
+                future.result()
+
+    with tempfile.TemporaryDirectory() as directory:
+        primary_paths = [Path(directory) / f'primary-{i}.log' for i in range(2)]
+        replica_paths = [Path(directory) / f'replica-{i}.log' for i in range(2)]
+        servers = []
+
+        def start_groups():
+            for i in range(2):
+                servers.append(start_server(server_executable, replica_paths[i], replica_ports[i],
+                    idle_timeout=10, role='replica', history_id=f'group-{i}', partition_id=i))
+                servers.append(start_server(server_executable, primary_paths[i], primary_ports[i],
+                    idle_timeout=10, role='primary', replica_port=replica_ports[i],
+                    history_id=f'group-{i}', partition_id=i))
+
+        def check_history(group, writers):
+            primary_log = primary_paths[group].read_bytes()
+            assert primary_log == replica_paths[group].read_bytes(), f'group {group}: histories differ'
+            lines = primary_log.decode().splitlines()
+            assert lines[:2] == [f'PARTITION {group} fnv1a64-mod2-v1', f'HISTORY group-{group}']
+            commands = []
+            for sequence, line in enumerate(lines[2:], start=1):
+                number, command = line.split(' ', 1)
+                assert number == str(sequence), f'group {group}: sequence gap or duplicate'
+                commands.append(command)
+            expected = []
+            for key, label in writers:
+                writer_commands = [f'SET "{key}" "{label}-{i}"' for i in range(request_count)]
+                expected.extend(writer_commands)
+                # Each client's own order must be retained, while either order
+                # between the two clients is valid.
+                prefix = f'SET "{key}" "{label}-'
+                assert [command for command in commands if command.startswith(prefix)] == writer_commands
+            assert sorted(commands) == sorted(expected), f'group {group}: missing, duplicate or misplaced writes'
+            return commands[-1].rsplit('"', 2)[1]
+
+        def check_values(values):
+            for group, key in enumerate(keys):
+                for port in [primary_ports[group], replica_ports[group]]:
+                    with open_client(port) as client, client.makefile('rb') as stream:
+                        client.sendall(f'GET "{key}"\n'.encode())
+                        expect_line(stream, f'VALUE "{values[group]}"\n'.encode())
+
+        try:
+            start_groups()
+            run_writers(keys, ['different-a', 'different-b'])
+            writers = [[(keys[0], 'different-a')], [(keys[1], 'different-b')]]
+            values = [check_history(i, writers[i]) for i in range(2)]
+            assert values == [f'different-a-{request_count - 1}', f'different-b-{request_count - 1}']
+            check_values(values)
+
+            run_writers([keys[0], keys[0]], ['shared-a', 'shared-b'])
+            writers[0].extend([(keys[0], 'shared-a'), (keys[0], 'shared-b')])
+            values = [check_history(i, writers[i]) for i in range(2)]
+            assert values[0] in [f'shared-a-{request_count - 1}', f'shared-b-{request_count - 1}']
+            check_values(values)
+            saved_logs = [path.read_bytes() for path in primary_paths]
+
+            for server in reversed(servers):
+                stop_server(server)
+            start_groups()  # Same paths, partition IDs, and history IDs.
+            check_values(values)
+            for i in range(2):
+                assert primary_paths[i].read_bytes() == replica_paths[i].read_bytes() == saved_logs[i]
+
+            # New writes prove that restart restored sequence progress too.
+            result = subprocess.run(arguments,
+                input='SET "color" "restarted-0"\nSET "full name" "restarted-1"\nEXIT\n',
+                text=True, capture_output=True, timeout=15)
+            assert result.returncode == 0, result.stderr
+            assert result.stdout.splitlines() == ['OK', 'OK', 'BYE'], result.stdout
+            check_values(['restarted-0', 'restarted-1'])
+            for i in range(2):
+                mutation_count = len(saved_logs[i].splitlines()) - 2  # Exclude both headers.
+                next_sequence = mutation_count + 1
+                expected = saved_logs[i] + f'{next_sequence} SET "{keys[i]}" "restarted-{i}"\n'.encode()
+                assert primary_paths[i].read_bytes() == replica_paths[i].read_bytes() == expected
+        finally:
+            for server in reversed(servers):
+                stop_server(server)
+
+
 def main():
     server_executable, client_executable = map(Path, sys.argv[1:])
     ports = [choose_port(), choose_port()]
@@ -241,7 +355,8 @@ def main():
     assert result.stdout.endswith('BYE\n')
     test_partitioned_replication(server_executable)
     test_replicated_failure_isolation(server_executable, client_executable)
-    print('Distribution routing, ownership, and failure-isolation tests passed.')
+    test_concurrent_replicated_clients(server_executable, client_executable)
+    print('Distribution routing, ownership, failure-isolation, and concurrency tests passed.')
 
 
 if __name__ == '__main__':
