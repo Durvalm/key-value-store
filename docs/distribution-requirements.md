@@ -451,6 +451,15 @@ Use fresh datasets when switching from the old routing algorithm unless an
 explicit migration is implemented. Do not point the new mapping at populated
 7A logs and assume existing data has moved.
 
+### First experiment implemented
+
+`kv_partition_experiment` implements the sorted-list lookup and compares modulo
+with a one-position-per-group FNV ring over 10,000 fixed keys. The
+[experiment notes](hash-ring-experiment.md) show the code flow, captured output,
+and the severe imbalance observed with the current group hashes. This is an
+isolated ownership experiment; live routing and log formats are unchanged.
+Better-spread placement needs investigation before adopting a ring for migration.
+
 ## 7B, Step 8: Implement a controlled offline rebalance
 
 Begin with a stopped/quiesced deployment and a fixed old mapping and new mapping.

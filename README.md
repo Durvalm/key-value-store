@@ -105,6 +105,9 @@ consistent-hashing/rebalancing and advanced follow-up milestones.
 See [Distribution Results](docs/distribution-results.md) for the measured one-group
 versus two-group comparison, correctness evidence, and reproduction commands.
 
+The [first hash-ring experiment](docs/hash-ring-experiment.md) demonstrates 7B
+ownership lookup and measures movement and imbalance without changing live routing.
+
 Explore selected distributed-system mechanisms such as:
 
 - Partitioning and consistent hashing
