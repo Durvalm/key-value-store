@@ -465,6 +465,10 @@ position and preserves that baseline. Live routing and log formats are unchanged
 
 ## 7B, Step 8: Implement a controlled offline rebalance
 
+The [shared layout preparation](cluster-layout.md) now provides versioned old/new
+definitions and a read-only owner preview. It does not yet perform data transfer,
+activate layouts, or change the running client/server routing.
+
 Begin with a stopped/quiesced deployment and a fixed old mapping and new mapping.
 No client traffic is admitted during migration; this deliberately avoids concurrent
 writes, delete races, and dual-owner coordination in the first migration exercise.

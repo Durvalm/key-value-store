@@ -1,0 +1,4 @@
+LAYOUT 1 fnv1a64-fmix64-ring-v1 64
+GROUP "group-0" "new-group-0" 6480 6481 "data/new/group-0-primary.log" "data/new/group-0-replica.log"
+GROUP "group-1" "new-group-1" 6482 6483 "data/new/group-1-primary.log" "data/new/group-1-replica.log"
+GROUP "group-2" "new-group-2" 6484 6485 "data/new/group-2-primary.log" "data/new/group-2-replica.log"
