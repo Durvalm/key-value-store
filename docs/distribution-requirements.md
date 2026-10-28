@@ -461,13 +461,15 @@ baseline alongside the new mixed result: positions spread, movement decreases fo
 this dataset, and substantial imbalance remains. A second comparison now uses
 64 virtual positions per group: key counts become more balanced on the same
 dataset, while lookup still returns real group IDs. The default remains one
-position and preserves that baseline. Live routing and log formats are unchanged.
+position and preserves that baseline. The experiment remains isolated; opting into
+layout mode now connects this ring to live routing as described in Step 8.
 
 ## 7B, Step 8: Implement a controlled offline rebalance
 
-The [shared layout preparation](cluster-layout.md) now provides versioned old/new
-definitions and a read-only owner preview. It does not yet perform data transfer,
-activate layouts, or change the running client/server routing.
+The [shared layout integration](cluster-layout.md) now provides versioned old/new
+definitions, client routing, node startup, saved ownership validation and peer
+layout agreement. The owner preview remains read-only. Data transfer and verified
+activation are still to be implemented; editing a layout does not move data.
 
 Begin with a stopped/quiesced deployment and a fixed old mapping and new mapping.
 No client traffic is admitted during migration; this deliberately avoids concurrent

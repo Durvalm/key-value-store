@@ -28,6 +28,8 @@ public:
     const std::string &routing() const { return routing_; }
     std::size_t positions_per_group() const { return positions_per_group_; }
     const std::vector<GroupDefinition> &groups() const { return groups_; }
+    // Canonical ownership settings only; endpoints/log locations may change.
+    std::string ownership_definition() const;
     const GroupDefinition &owner(const std::string &key) const;
     const GroupDefinition &group(const std::string &id) const;
 

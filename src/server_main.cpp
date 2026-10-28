@@ -1,4 +1,5 @@
 #include "command_processor.h"
+#include "cluster_layout.h"
 #include "key_value_store.h"
 #include "replica_connection.h"
 
@@ -18,6 +19,7 @@
 #include <cstddef>
 #include <exception>
 #include <iostream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -181,6 +183,9 @@ namespace
         std::string pending_data;
         bool client_connected = true;
         bool peer_connection = false;
+        const std::string ownership = store.ownership_header();
+        // A full layout (up to 64 IDs of 128 bytes) is larger than a client command.
+        const std::size_t handshake_limit = ownership.empty() ? max_request_size : 16384;
 
         while (client_connected)
         {
@@ -239,10 +244,17 @@ namespace
                     if (command == "REPLICA")
                     {
                         std::string history_id;
-                        std::string extra;
-                        if (request.size() > max_request_size ||
+                        std::string extra, peer_ownership;
+                        bool valid = static_cast<bool>(handshake >> history_id);
+                        if (!ownership.empty())
+                        {
+                            handshake >> std::ws;
+                            valid = valid && handshake.peek() == '"' &&
+                                    static_cast<bool>(handshake >> std::quoted(peer_ownership));
+                        }
+                        if (request.size() > handshake_limit ||
                             request.find_first_of("\r\n") != std::string::npos ||
-                            !(handshake >> history_id) || (handshake >> extra))
+                            !valid || (handshake >> extra))
                         {
                             send_all(client_socket, "ERROR INVALID_HANDSHAKE \"Usage: REPLICA <history-id>\"\n");
                             return;
@@ -250,6 +262,12 @@ namespace
                         if (history_id != store.history_id())
                         {
                             send_all(client_socket, "ERROR HISTORY_MISMATCH \"Replica belongs to a different history\"\n");
+                            return;
+                        }
+
+                        if (peer_ownership != ownership)
+                        {
+                            send_all(client_socket, "ERROR LAYOUT_MISMATCH \"Peer ownership layout differs\"\n");
                             return;
                         }
 
@@ -339,7 +357,9 @@ namespace
             }
 
             // A uint64 sequence plus its separating space adds at most 21 bytes.
-            const auto frame_limit = max_request_size + (peer_connection ? 21 : 0);
+            std::size_t frame_limit = max_request_size + (peer_connection ? 21 : 0);
+            if (role == "replica" && !peer_connection && pending_data.starts_with("REPLICA "))
+                frame_limit = handshake_limit;
             if (client_connected && pending_data.size() > frame_limit)
             {
                 send_all(client_socket, request_too_large_result().response);
@@ -354,9 +374,12 @@ namespace
         unsigned int idle_timeout_seconds,
         const std::string &role,
         std::uint16_t replica_port,
-        const std::string &new_history_id, int partition_id)
+        const std::string &new_history_id, int partition_id,
+        const ClusterLayout *layout = nullptr, const std::string &group_id = "")
     {
-        KeyValueStore store(file_path, role != "standalone", new_history_id, partition_id);
+        // Both branches construct directly in place; the store owns its layout copy.
+        KeyValueStore store = layout ? KeyValueStore(file_path, *layout, group_id)
+                                     : KeyValueStore(file_path, role != "standalone", new_history_id, partition_id);
 
         const int listening_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
@@ -412,7 +435,7 @@ namespace
         {
             try
             {
-                replica_socket = connect_to_replica(replica_port, store.history_id(), store.history_records());
+                replica_socket = connect_to_replica(replica_port, store.history_id(), store.history_records(), store.ownership_header());
                 std::cout << "Connected to replica on 127.0.0.1:" << replica_port << '\n';
             }
             catch (...)
@@ -628,6 +651,35 @@ namespace
 
 int main(int argc, char *argv[])
 {
+    if (argc > 1 && std::string(argv[1]) == "--layout")
+    {
+        if (argc != 5 && argc != 6)
+        {
+            std::cerr << "Usage: kv_server --layout <file> <group-id> <primary|replica> [idle-timeout-seconds]\n";
+            return EXIT_FAILURE;
+        }
+        try
+        {
+            const auto layout = read_layout(argv[2]);
+            const auto &group = layout.group(argv[3]);
+            const std::string role = argv[4];
+            if (role != "primary" && role != "replica")
+                throw std::runtime_error("Layout nodes require primary or replica role");
+            unsigned int timeout = default_idle_timeout_seconds;
+            if (argc == 6 && !parse_idle_timeout(argv[5], timeout))
+                throw std::runtime_error("Invalid idle timeout");
+            if (!install_signal_handlers())
+                throw std::runtime_error("Could not install signal handlers");
+            return run_server(role == "primary" ? group.primary_log : group.replica_log,
+                              role == "primary" ? group.primary_port : group.replica_port,
+                              timeout, role, group.replica_port, group.history_id, -1, &layout, group.id);
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "Server startup failed: " << error.what() << '\n';
+            return EXIT_FAILURE;
+        }
+    }
     // Optional pairs follow the positional arguments, in either order.
     std::string new_history_id;
     int partition_id = -1;

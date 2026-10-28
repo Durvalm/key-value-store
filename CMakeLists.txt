@@ -119,6 +119,12 @@ if(BUILD_TESTING)
         TIMEOUT 30
     )
 
+    add_test(NAME kv_layout_integration_tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/kv_layout_integration_test.py
+            $<TARGET_FILE:kv_server> $<TARGET_FILE:kv_client>)
+    set_tests_properties(kv_layout_integration_tests PROPERTIES TIMEOUT 30)
+
     add_test(NAME kv_distribution_tests
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/kv_distribution_test.py

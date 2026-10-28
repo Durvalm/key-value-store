@@ -46,6 +46,11 @@ int main()
     const ClusterLayout modulo("fnv1a64-mod-v1", 1, {groups[0], groups[1]});
     const ClusterLayout ring("fnv1a64-fmix64-ring-v1", 64, groups);
     const ClusterLayout reordered("fnv1a64-fmix64-ring-v1", 64, {groups[2], groups[0], groups[1]});
+    expect(ring.ownership_definition() == reordered.ownership_definition(), "ring identity canonicalizes member order");
+    const ClusterLayout reversed_modulo("fnv1a64-mod-v1", 1, {groups[1], groups[0]});
+    expect(modulo.ownership_definition() != reversed_modulo.ownership_definition(), "modulo identity preserves index order");
+    const ClusterLayout changed_count("fnv1a64-fmix64-ring-v1", 32, groups);
+    expect(ring.ownership_definition() != changed_count.ownership_definition(), "virtual count changes ownership identity");
     const auto expected_ring = build_ring({"group-0", "group-1", "group-2"}, 64);
     for (std::size_t i = 0; i < 1000; ++i)
     {

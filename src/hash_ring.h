@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-// Experimental ownership only. The live servers still use partition_for_key().
+// Shared ring ownership for layout mode; legacy routing still uses partition_for_key().
 struct RingEntry
 {
     std::uint64_t position;

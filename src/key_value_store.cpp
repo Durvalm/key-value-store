@@ -98,6 +98,27 @@ KeyValueStore::KeyValueStore(const std::string &file_path, bool numbered_history
     if (!new_history_id.empty() && (!numbered_history_ || !valid_history_id(new_history_id)))
         throw std::runtime_error("History ID requires numbered mode and 1-128 letters, digits, dots, underscores or hyphens");
 
+    initialize(new_history_id);
+}
+
+KeyValueStore::KeyValueStore(const std::string &file_path, const ClusterLayout &layout,
+                           const std::string &group_id)
+    : file_path_(file_path), layout_(layout), group_id_(group_id), numbered_history_(true)
+{
+    initialize(layout_->group(group_id_).history_id);
+}
+
+std::string KeyValueStore::ownership_header() const
+{
+    if (!layout_)
+        return "";
+    std::ostringstream header;
+    header << "OWNERSHIP " << std::quoted(group_id_) << ' ' << layout_->ownership_definition();
+    return header.str();
+}
+
+void KeyValueStore::initialize(const std::string &new_history_id)
+{
     replay();
     const bool new_history = numbered_history_ && history_id_.empty();
     if (new_history)
@@ -110,6 +131,8 @@ KeyValueStore::KeyValueStore(const std::string &file_path, bool numbered_history
         throw std::runtime_error("Supplied history ID does not match the saved history ID");
 
     open_log();
+    if (layout_ && !layout_header_present_ && !partition_header_present_)
+        log_file_ << ownership_header() << '\n';
     if (partition_id_ != -1 && !partition_header_present_)
         log_file_ << "PARTITION " << partition_id_ << " fnv1a64-mod2-v1\n";
     if (new_history)
@@ -121,6 +144,8 @@ KeyValueStore::KeyValueStore(const std::string &file_path, bool numbered_history
 
 bool KeyValueStore::owns_key(const std::string &key) const
 {
+    if (layout_)
+        return layout_->owner(key).id == group_id_;
     return partition_id_ == -1 || partition_for_key(key) == static_cast<std::size_t>(partition_id_);
 }
 
@@ -397,7 +422,26 @@ void KeyValueStore::replay()
     std::size_t line_number = 0;
     std::string record;
 
+    // New layout-managed logs persist the complete ownership definition.
+    if (log_file.peek() == 'O')
+    {
+        std::getline(log_file, record);
+        ++line_number;
+        if (!log_file || log_file.eof() || !layout_ || record != ownership_header())
+            throw std::runtime_error("Saved ownership layout does not match startup configuration");
+        layout_header_present_ = true;
+        if (log_file.peek() == std::ifstream::traits_type::eof())
+            throw std::runtime_error("Layout log is missing its HISTORY header");
+    }
+    // Existing 7A partition logs may be reopened only with the equivalent
+    // two-group modulo layout and matching partition index/history ID.
+    int expected_partition = partition_id_;
+    if (layout_ && layout_->routing() == "fnv1a64-mod-v1" && layout_->groups().size() == 2)
+        expected_partition = layout_->groups()[0].id == group_id_ ? 0 : 1;
+
     // Partition metadata precedes HISTORY (if present) and is not a mutation.
+    if (layout_header_present_ && log_file.peek() == 'P')
+        throw std::runtime_error("Unexpected PARTITION header after OWNERSHIP");
     if (log_file.peek() == 'P')
     {
         std::getline(log_file, record);
@@ -406,14 +450,15 @@ void KeyValueStore::replay()
         std::string marker, saved_partition, routing;
         if (!log_file || log_file.eof() ||
             !(header >> marker >> saved_partition >> routing) || !reached_end(header) ||
-            marker != "PARTITION" || partition_id_ == -1 ||
-            saved_partition != std::to_string(partition_id_) || routing != "fnv1a64-mod2-v1")
+            marker != "PARTITION" || expected_partition == -1 ||
+            saved_partition != std::to_string(expected_partition) || routing != "fnv1a64-mod2-v1")
             throw std::runtime_error("Partition log/configuration mismatch or malformed PARTITION header");
         partition_header_present_ = true;
         if (numbered_history_ && log_file.peek() == std::ifstream::traits_type::eof())
             throw std::runtime_error("Partitioned numbered log is missing its HISTORY header");
     }
-    else if (partition_id_ != -1 && log_file.peek() != std::ifstream::traits_type::eof())
+    else if (((layout_ && !layout_header_present_) || partition_id_ != -1) &&
+             log_file.peek() != std::ifstream::traits_type::eof())
         throw std::runtime_error("Existing log has no PARTITION header; use a fresh partition log");
 
     if (numbered_history_ && log_file.peek() != std::ifstream::traits_type::eof())

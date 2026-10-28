@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cluster_layout.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -19,6 +21,12 @@ public:
     explicit KeyValueStore(const std::string &file_path, bool numbered_history = false,
                            const std::string &new_history_id = "", int partition_id = -1);
 
+    // Layout-managed nodes use numbered histories and the group's expected ID.
+    KeyValueStore(const std::string &file_path, const ClusterLayout &layout,
+                  const std::string &group_id);
+    // Canonical identity shared by log headers and the peer handshake; empty in legacy mode.
+    std::string ownership_header() const;
+
     // Partition identity is fixed at construction; -1 means unpartitioned.
     bool owns_key(const std::string &key) const;
     void set(const std::string &key, const std::string &value);
@@ -35,6 +43,7 @@ public:
     std::uint64_t apply_replica_record(const std::string &record);
 
 private:
+    void initialize(const std::string &new_history_id);
     void require_owned_key(const std::string &key) const;
     void replay();
     void append_record(const std::string &record);
@@ -42,6 +51,9 @@ private:
     std::string file_path_;
     std::ofstream log_file_;
     std::unordered_map<std::string, std::string> data_;
+    std::optional<ClusterLayout> layout_;
+    std::string group_id_;
+    bool layout_header_present_ = false;
     int partition_id_ = -1;
     bool partition_header_present_ = false;
     bool numbered_history_ = false;

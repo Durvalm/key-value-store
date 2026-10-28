@@ -85,6 +85,21 @@ ClusterLayout::ClusterLayout(const std::string &routing, std::size_t positions_p
         ring_ = build_ring(ids, positions_per_group_);
 }
 
+std::string ClusterLayout::ownership_definition() const
+{
+    std::vector<std::string> ids;
+    for (const GroupDefinition &group : groups_)
+        ids.push_back(group.id);
+    // Ring membership order has no meaning; modulo indices do.
+    if (routing_ == "fnv1a64-fmix64-ring-v1")
+        std::sort(ids.begin(), ids.end());
+    std::ostringstream definition;
+    definition << routing_ << ' ' << positions_per_group_;
+    for (const std::string &id : ids)
+        definition << ' ' << std::quoted(id);
+    return definition.str();
+}
+
 const GroupDefinition &ClusterLayout::group(const std::string &id) const
 {
     for (const GroupDefinition &group : groups_)

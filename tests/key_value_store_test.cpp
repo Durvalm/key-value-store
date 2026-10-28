@@ -776,6 +776,70 @@ namespace
         expect_runtime_error([&]() { KeyValueStore store(path.string(), true, "group-1", 1); }, "missing HISTORY after partition fails");
         std::filesystem::remove(path);
     }
+    void test_layout_owned_history()
+    {
+        const auto path = test_file("layout_owned_history");
+        std::filesystem::remove(path);
+        std::vector<GroupDefinition> groups{
+            {"group-0", "layout-history-0", 6380, 6381, path.string(), path.string() + ".replica"},
+            {"group-1", "layout-history-1", 6382, 6383, path.string() + ".p1", path.string() + ".r1"},
+            {"group-2", "layout-history-2", 6384, 6385, path.string() + ".p2", path.string() + ".r2"},
+        };
+        const ClusterLayout layout("fnv1a64-fmix64-ring-v1", 64, groups);
+        std::string owned, wrong;
+        for (int i = 0; owned.empty() || wrong.empty(); ++i)
+        {
+            const auto key = "layout-key-" + std::to_string(i);
+            if (layout.owner(key).id == "group-0") owned = key;
+            else wrong = key;
+        }
+        std::string identity;
+        {
+            KeyValueStore store(path.string(), layout, "group-0");
+            identity = store.ownership_header();
+            expect(read_file(path) == identity + "\nHISTORY layout-history-0\n", "layout identity precedes numbered history");
+            store.set(owned, "saved");
+            const auto before = read_file(path);
+            expect(process_command("SET \"" + wrong + "\" \"wrong\"", store).response.starts_with("ERROR WRONG_PARTITION"),
+                   "command processor enforces ring ownership");
+            expect_runtime_error([&] { store.apply_replica_record("2 SET \"" + wrong + "\" \"wrong\""); },
+                                 "peer cannot bypass layout ownership");
+            expect(read_file(path) == before, "wrong owner leaves history untouched");
+        }
+        const auto saved = read_file(path);
+        {
+            const ClusterLayout reordered("fnv1a64-fmix64-ring-v1", 64, {groups[2], groups[0], groups[1]});
+            KeyValueStore store(path.string(), reordered, "group-0");
+            expect(store.ownership_header() == identity && store.get(owned) == "saved" && store.last_sequence() == 1,
+                   "ring reordering preserves canonical identity and replay");
+            expect(store.apply_replica_record("1 SET \"" + owned + "\" \"saved\"") == 1,
+                   "duplicate verification still works for layout-managed history");
+        }
+        const ClusterLayout changed("fnv1a64-fmix64-ring-v1", 32, groups);
+        expect_runtime_error([&] { KeyValueStore store(path.string(), changed, "group-0"); }, "reject changed virtual count on restart");
+        expect_runtime_error([&] { KeyValueStore store(path.string(), layout, "group-1"); }, "reject different group on restart");
+        expect_runtime_error([&] { KeyValueStore store(path.string(), true, "layout-history-0"); }, "layout log cannot bypass identity through legacy mode");
+        expect(read_file(path) == saved, "startup mismatch does not modify saved history");
+        write_file(path, identity + "\n");
+        expect_runtime_error([&] { KeyValueStore store(path.string(), layout, "group-0"); }, "layout header requires complete HISTORY");
+        std::filesystem::remove(path);
+
+        // Existing 7A logs may use the matching two-group modulo layout without
+        // rewriting their prefix. Ring adoption still requires actual migration.
+        {
+            KeyValueStore store(path.string(), true, "layout-history-0", 0);
+            store.set("color", "blue");
+        }
+        const auto legacy = read_file(path);
+        const ClusterLayout modulo("fnv1a64-mod-v1", 1, {groups[0], groups[1]});
+        {
+            KeyValueStore store(path.string(), modulo, "group-0");
+            expect(store.get("color") == "blue", "matching modulo layout opens legacy partition log");
+        }
+        expect(read_file(path) == legacy, "legacy prefix is preserved rather than silently upgraded");
+        expect_runtime_error([&] { KeyValueStore store(path.string(), layout, "group-0"); }, "ring cannot reinterpret legacy modulo data");
+        std::filesystem::remove(path);
+    }
 } // namespace
 
 void test_contains()
@@ -793,6 +857,7 @@ void test_contains()
 
 int main()
 {
+    test_layout_owned_history();
     test_partition_ownership();
     test_partition_numbered_history();
     test_history_header();

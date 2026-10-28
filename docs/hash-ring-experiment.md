@@ -9,7 +9,8 @@ cmake --build build-release
 
 This program only calculates ownership. It opens no sockets, reads no store logs,
 and moves no data. The live client/server still use the original two-partition
-modulo rule. Virtual nodes are now part of this experiment; migration is not implemented.
+modulo rule in legacy mode. Layout mode now uses this same ring for live routing;
+see the [layout guide](cluster-layout.md). The experiment itself still moves no data.
 
 ## Read the code in this order
 
@@ -112,9 +113,10 @@ it does not choose random positions, enforce equal loads, remove pre-existing FN
 collisions, or provide cryptographic protection. This composition is not the full
 MurmurHash3 string-hashing algorithm.
 
-The original `stable_key_hash` and application routing remain unchanged. No new
-dependency or live hash-selection option was added. Only experimental ring
-construction and key lookup call `ring_hash`. Its exact outputs
+The original `stable_key_hash` and legacy modulo routing remain unchanged. No new
+dependency was added. Ring construction and key lookup call `ring_hash`; opting
+into layout-driven routing now reuses these functions in the application too.
+Its exact outputs
 are fixed by golden tests; changing the algorithm changes ownership.
 
 Captured 2026-10-27, rerunning the exact same group IDs and 10,000 keys:
@@ -197,9 +199,11 @@ part of one fixed deployment definition. All routers and nodes must agree.
 Changing the position count can change ownership even though old token positions
 remain present; it is not a safe live configuration toggle.
 
-The application still uses modulo routing and its existing log headers. Neither
-this experiment nor changing a group list moves stored values. Offline migration
-must build and verify fresh destination histories from the original live state.
+Legacy application mode still uses modulo routing. Layout mode now supports this
+ring and persists its ownership definition, but changing a group list does not move
+stored values. Offline migration must build and verify fresh destination histories
+from the original live state. Existing modulo logs cannot be reinterpreted as ring
+logs by changing startup configuration.
 
 ## Checks
 

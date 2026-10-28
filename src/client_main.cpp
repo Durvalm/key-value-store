@@ -1,4 +1,5 @@
 #include "command_parser.h"
+#include "cluster_layout.h"
 #include "partition.h"
 
 #include <arpa/inet.h>
@@ -245,7 +246,8 @@ namespace
         return EXIT_SUCCESS;
     }
 
-    int run_cluster_client(const std::string &server_address, const std::uint16_t ports[2])
+    int run_cluster_client(const std::string &server_address, const std::uint16_t ports[2],
+                           const ClusterLayout *layout = nullptr)
     {
         int exit_status = EXIT_SUCCESS;
         std::string line;
@@ -274,12 +276,25 @@ namespace
                 continue;
             }
 
-            const std::size_t partition = partition_for_key(parsed.key);
-            const int client_socket = connect_to_server(server_address, ports[partition]);
+            std::uint16_t port;
+            std::string target;
+            if (layout)
+            {
+                const auto &owner = layout->owner(parsed.key);
+                port = owner.primary_port;
+                target = owner.id;
+            }
+            else
+            {
+                const std::size_t partition = partition_for_key(parsed.key);
+                port = ports[partition];
+                target = "partition " + std::to_string(partition);
+            }
+            const int client_socket = connect_to_server(server_address, port);
             if (client_socket == -1)
             {
-                std::cout << "ERROR PARTITION_UNAVAILABLE \"Could not connect to partition "
-                          << partition << "\"\n";
+                std::cout << "ERROR PARTITION_UNAVAILABLE \"Could not connect to "
+                          << target << "\"\n";
                 exit_status = EXIT_FAILURE;
                 continue;
             }
@@ -307,6 +322,24 @@ int main(int argc, char *argv[])
 {
     // A disconnected peer should produce a send error rather than terminate us.
     std::signal(SIGPIPE, SIG_IGN);
+    if (argc > 1 && std::string(argv[1]) == "--layout")
+    {
+        if (argc != 3)
+        {
+            std::cerr << "Usage: kv_client --layout <file>\n";
+            return EXIT_FAILURE;
+        }
+        try
+        {
+            const auto layout = read_layout(argv[2]);
+            return run_cluster_client("127.0.0.1", nullptr, &layout);
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "Client failed: " << error.what() << '\n';
+            return EXIT_FAILURE;
+        }
+    }
     if (argc > 1 && std::string(argv[1]) == "--cluster")
     {
         std::uint16_t ports[2]{};

@@ -108,8 +108,9 @@ versus two-group comparison, correctness evidence, and reproduction commands.
 The [first hash-ring experiment](docs/hash-ring-experiment.md) demonstrates 7B
 ownership lookup and measures movement and imbalance without changing live routing.
 
-The [shared layout preparation](docs/cluster-layout.md) defines old/new groups and
-ownership rules, with a read-only preview command for the upcoming migration.
+The [shared layout guide](docs/cluster-layout.md) explains layout-driven client
+routing, server startup and saved ownership checks. It also includes the read-only
+old/new ownership preview; data migration remains a separate next milestone.
 
 Explore selected distributed-system mechanisms such as:
 

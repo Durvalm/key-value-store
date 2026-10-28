@@ -1,4 +1,5 @@
 #include "replica_connection.h"
+#include <iomanip>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -58,7 +59,7 @@ namespace
 }
 
 int connect_to_replica(std::uint16_t port, const std::string &history_id,
-                       const std::vector<std::string> &history)
+                       const std::vector<std::string> &history, const std::string &ownership)
 {
     const int replica_socket =
         ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -132,7 +133,12 @@ int connect_to_replica(std::uint16_t port, const std::string &history_id,
             throw std::runtime_error("Could not set replica I/O timeouts");
         }
 
-        const std::string response = exchange_message(replica_socket, "REPLICA " + history_id + '\n');
+        std::ostringstream handshake;
+        handshake << "REPLICA " << history_id;
+        if (!ownership.empty())
+            handshake << ' ' << std::quoted(ownership);
+        handshake << '\n';
+        const std::string response = exchange_message(replica_socket, handshake.str());
         std::istringstream reply(response);
         std::string marker, replica_id, sequence_text, extra;
         if (!(reply >> marker >> replica_id >> sequence_text) || (reply >> extra) ||
