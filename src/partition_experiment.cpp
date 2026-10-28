@@ -25,13 +25,19 @@ int main()
     const std::vector<std::string> ids{"group-0", "group-1", "group-2"};
     const auto before = build_ring({ids[0], ids[1]});
     const auto after = build_ring(ids);
+    constexpr std::size_t positions_per_group = 64;
+    const auto virtual_before = build_ring({ids[0], ids[1]}, positions_per_group);
+    const auto virtual_after = build_ring(ids, positions_per_group);
     std::cout << "Mixed FNV-1a + fmix64 group positions (64-bit, decimal):\n";
     for (const RingEntry &entry : after)
         std::cout << "  " << entry.group_id << ": " << entry.position << '\n';
+    std::cout << "Virtual ring: " << positions_per_group << " positions per group; "
+              << virtual_before.size() << " entries before, " << virtual_after.size() << " after.\n";
 
     constexpr std::size_t key_count = 10000;
     std::array<std::size_t, 3> modulo_before{}, modulo_after{}, ring_before{}, ring_after{};
-    std::size_t modulo_moved = 0, ring_moved = 0;
+    std::array<std::size_t, 3> virtual_counts_before{}, virtual_counts_after{};
+    std::size_t modulo_moved = 0, ring_moved = 0, virtual_moved = 0;
     for (std::size_t i = 0; i < key_count; ++i)
     {
         const std::string key = "experiment-key-" + std::to_string(i);
@@ -44,15 +50,23 @@ int main()
             ++modulo_moved;
         const auto old_ring = group_for_key(before, key);
         const auto new_ring = group_for_key(after, key);
+        const auto old_virtual = group_for_key(virtual_before, key);
+        const auto new_virtual = group_for_key(virtual_after, key);
         for (std::size_t group = 0; group < ids.size(); ++group)
         {
             if (old_ring == ids[group])
                 ++ring_before[group];
             if (new_ring == ids[group])
                 ++ring_after[group];
+            if (old_virtual == ids[group])
+                ++virtual_counts_before[group];
+            if (new_virtual == ids[group])
+                ++virtual_counts_after[group];
         }
         if (old_ring != new_ring)
             ++ring_moved;
+        if (old_virtual != new_virtual)
+            ++virtual_moved;
     }
     std::cout << "\nDataset: experiment-key-0 through experiment-key-9999\n"
               << "Strategy       group-0  group-1  group-2\n";
@@ -65,13 +79,17 @@ int main()
     };
     print_counts("Modulo, 2", modulo_before);
     print_counts("Modulo, 3", modulo_after);
-    print_counts("Ring, 2", ring_before);
-    print_counts("Ring, 3", ring_after);
+    print_counts("Ring (1), 2", ring_before);
+    print_counts("Ring (1), 3", ring_after);
+    print_counts("Ring (64), 2", virtual_counts_before);
+    print_counts("Ring (64), 3", virtual_counts_after);
     std::cout << std::fixed << std::setprecision(2)
               << "Modulo moved: " << modulo_moved << "/" << key_count
               << " (" << 100.0 * modulo_moved / key_count << "%)\n"
-              << "Ring moved: " << ring_moved << "/" << key_count
-              << " (" << 100.0 * ring_moved / key_count << "%)\n\n"
-              << "One position per group can still be imbalanced; mixing is not a balance guarantee.\n"
+              << "Ring (1) moved: " << ring_moved << "/" << key_count
+              << " (" << 100.0 * ring_moved / key_count << "%)\n"
+              << "Ring (64) moved: " << virtual_moved << "/" << key_count
+              << " (" << 100.0 * virtual_moved / key_count << "%)\n\n"
+              << "Extra positions spread ownership across smaller intervals; balance is not guaranteed.\n"
               << "This is an ownership experiment, not live routing or data migration.\n";
 }

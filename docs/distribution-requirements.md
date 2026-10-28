@@ -458,8 +458,10 @@ with a one-position-per-group ring over 10,000 fixed keys. The ring now uses
 FNV-1a followed by fmix64 for both keys and group IDs. The
 [experiment notes](hash-ring-experiment.md) preserve the original clustered FNV
 baseline alongside the new mixed result: positions spread, movement decreases for
-this dataset, and substantial imbalance remains. Virtual nodes are the next
-separate experiment. Live routing and log formats are unchanged.
+this dataset, and substantial imbalance remains. A second comparison now uses
+64 virtual positions per group: key counts become more balanced on the same
+dataset, while lookup still returns real group IDs. The default remains one
+position and preserves that baseline. Live routing and log formats are unchanged.
 
 ## 7B, Step 8: Implement a controlled offline rebalance
 

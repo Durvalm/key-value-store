@@ -17,10 +17,13 @@ std::uint64_t ring_hash(const std::string &text)
     return hash;
 }
 
-std::vector<RingEntry> build_ring(const std::vector<std::string> &group_ids)
+std::vector<RingEntry> build_ring(const std::vector<std::string> &group_ids,
+                                std::size_t positions_per_group)
 {
     if (group_ids.empty())
         throw std::invalid_argument("A ring needs at least one group");
+    if (positions_per_group == 0)
+        throw std::invalid_argument("Each group needs at least one position");
 
     std::vector<RingEntry> ring;
     for (const std::string &id : group_ids)
@@ -30,7 +33,12 @@ std::vector<RingEntry> build_ring(const std::vector<std::string> &group_ids)
         for (const RingEntry &entry : ring)
             if (entry.group_id == id)
                 throw std::invalid_argument("Duplicate group ID");
-        ring.push_back({ring_hash(id), id});
+        for (std::size_t index = 0; index < positions_per_group; ++index)
+        {
+            // Keep the original position so increasing the count only adds entries.
+            const std::string token = index == 0 ? id : id + '#' + std::to_string(index);
+            ring.push_back({ring_hash(token), id});
+        }
     }
     std::sort(ring.begin(), ring.end(), [](const RingEntry &a, const RingEntry &b)
     {

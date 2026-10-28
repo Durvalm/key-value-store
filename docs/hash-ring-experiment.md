@@ -9,14 +9,15 @@ cmake --build build-release
 
 This program only calculates ownership. It opens no sockets, reads no store logs,
 and moves no data. The live client/server still use the original two-partition
-modulo rule. Virtual nodes and migration are not implemented in this checkpoint.
+modulo rule. Virtual nodes are now part of this experiment; migration is not implemented.
 
 ## Read the code in this order
 
 1. `src/hash_ring.h`: a RingEntry contains a position and a group ID. A ring is
    just a sorted vector of these entries, not another process or network.
-2. `build_ring` in `src/hash_ring.cpp`: hash each unique, nonempty group ID,
-   then sort by position. Existing IDs keep their positions when membership grows.
+2. `build_ring` in `src/hash_ring.cpp`: validate group IDs, generate the requested
+   positions per group, then sort by position. Every entry retains the real group
+   ID. Existing token positions remain fixed when a new group is added.
 3. `group_for_position`: loop through the sorted vector; return the first entry
    whose position is at least the requested number. If none qualifies, return
    the first entry. That last return is the wrap-around.
@@ -112,8 +113,8 @@ collisions, or provide cryptographic protection. This composition is not the ful
 MurmurHash3 string-hashing algorithm.
 
 The original `stable_key_hash` and application routing remain unchanged. No new
-dependency, virtual-node setting, or live hash-selection option was added. Only
-experimental ring construction and key lookup call `ring_hash`. Its exact outputs
+dependency or live hash-selection option was added. Only experimental ring
+construction and key lookup call `ring_hash`. Its exact outputs
 are fixed by golden tests; changing the algorithm changes ownership.
 
 Captured 2026-10-27, rerunning the exact same group IDs and 10,000 keys:
@@ -141,16 +142,64 @@ This fixes the observed near-identical positions without achieving equal balance
 group-1 still owns about 69% of sampled keys because the gap before its position
 is large. Key counts measure storage ownership, not request popularity or CPU load.
 
+## Virtual nodes: multiple entries for the same group
+
+`build_ring(group_ids, positions_per_group)` now accepts a positive position count;
+it defaults to 1, preserving the previous experiment's output and ownership.
+The lookup functions and RingEntry structure are unchanged.
+
+```cpp
+const auto ring = build_ring({"group-0", "group-1", "group-2"}, 64);
+```
+
+This creates 192 entries, not 192 servers. For each real group, index 0 keeps the
+existing `ring_hash(id)` position. Extra positions use:
+
+```text
+index 0: ring_hash("group-0")   → entry pointing to group-0
+index 1: ring_hash("group-0#1") → entry pointing to group-0
+index 2: ring_hash("group-0#2") → entry pointing to group-0
+...
+index 63: ring_hash("group-0#63") → entry pointing to group-0
+```
+
+The suffix is only the input for generating a position. The returned owner is
+always the real group ID. Multiple sorted entries let a group own several smaller
+intervals instead of depending on the size of one gap. Zero positions are rejected.
+Position collisions retain the existing position-then-group-ID tie rule.
+
+The experiment compares 1 against 64 positions per group using the same IDs, mixed
+hash and 10,000 keys. Sixty-four is a fixed teaching setting, not a tuned optimum.
+Captured 2026-10-27:
+
+| Positions per group | Groups | group-0 keys | group-1 keys | group-2 keys |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 2 | 3,119 | 6,881 | Not present |
+| 1 | 3 | 999 | 6,881 | 2,120 |
+| 64 | 2 | 5,424 | 4,576 | Not present |
+| 64 | 3 | 3,277 | 3,046 | 3,677 |
+
+With 64 positions, 3,677 keys change owners when group-2 is added: **36.77%**, all
+to group-2. This is more movement than the single-position ring's 21.20%, because
+the new group now receives a larger, more balanced share. Lower movement alone
+is not the goal if it leaves one group owning most keys. Original modulo changes
+66.68% of owners, including movement between existing groups.
+
+These counts show better key balance for this dataset, not guaranteed perfect
+balance or balanced request traffic. The existing maximum group share after
+adding a third group falls from 68.81% with one position to 36.77% with 64.
+
 ## What to do next
 
-Compare multiple positions per group (virtual nodes) while retaining the same IDs,
-keys, mixed hash, and lookup rule. Several smaller intervals per group can reduce
-the influence of one large gap. That is a separate next step; it is not included
-in this change, and improved mixing alone is not a guarantee of good balance.
+We now have an ownership rule to evaluate for offline migration. Before connecting
+it to servers, the chosen hash, group IDs, token naming and position count must be
+part of one fixed deployment definition. All routers and nodes must agree.
+Changing the position count can change ownership even though old token positions
+remain present; it is not a safe live configuration toggle.
 
-Only after defining and testing a suitable ownership rule should we connect it
-to migration. Existing modulo log headers remain unchanged. Neither the old nor
-new experiment positions may be used to reopen those logs as though data had moved.
+The application still uses modulo routing and its existing log headers. Neither
+this experiment nor changing a group list moves stored values. Offline migration
+must build and verify fresh destination histories from the original live state.
 
 ## Checks
 
@@ -162,5 +211,7 @@ The ring test fixes full mixed-hash outputs, including UTF-8 and embedded NUL
 bytes, and checks known group/key mappings. It also covers exact boundaries,
 wrap-around including the maximum
 64-bit value, insertion/removal locality, input ordering, single-group lookup,
-invalid membership and the collision tie rule. Existing hash vectors and live
+invalid membership and the collision tie rule. Virtual-node tests check counts,
+real-group identity, fixed token positions, membership-order independence, adding
+and removing groups, and zero-count rejection. Existing hash vectors and live
 store/network/replication tests also continue to pass.
