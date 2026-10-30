@@ -199,9 +199,11 @@ source groups, compares complete primary/replica histories, and exports current
 values once per primary while retaining the source logs. File-backed stores hold
 lifetime process locks so snapshot collection refuses running nodes.
 
-Transfer into fresh destination groups, exact destination verification and safe
-activation remain next. Traffic must stay paused and original logs intact
-throughout that offline operation. A snapshot alone is not a completed migration.
+The [destination transfer](destination-transfer.md) now sends fresh captured values
+to reserved, empty replicated destination groups while retaining source locks.
+Exact destination verification and safe activation remain next. Traffic must stay
+paused and original logs intact throughout that offline operation. Copying alone
+is not a completed migration.
 
 ## Verification
 

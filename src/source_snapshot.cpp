@@ -13,7 +13,8 @@
 #include <sstream>
 #include <stdexcept>
 
-SourceSnapshot collect_source_snapshot(const ClusterLayout &layout)
+OfflineSources::OfflineSources(const ClusterLayout &layout)
+    : layout_(layout)
 {
     // Refuse missing files and aliases before opening a store. In particular,
     // a primary and replica must not just be two hard links to the same log.
@@ -31,23 +32,28 @@ SourceSnapshot collect_source_snapshot(const ClusterLayout &layout)
 
     // Keep the stores alive together: none of these logs can be reopened by a
     // cooperating server until every group has been checked and copied.
-    std::vector<std::unique_ptr<KeyValueStore>> primaries, replicas;
     for (const auto &group : layout.groups())
     {
-        primaries.push_back(std::make_unique<KeyValueStore>(group.primary_log, layout, group.id, true));
-        replicas.push_back(std::make_unique<KeyValueStore>(group.replica_log, layout, group.id, true));
+        primaries_.push_back(std::make_unique<KeyValueStore>(group.primary_log, layout, group.id, true));
+        replicas_.push_back(std::make_unique<KeyValueStore>(group.replica_log, layout, group.id, true));
     }
 
-    SourceSnapshot snapshot;
-    snapshot.ownership_definition = layout.ownership_definition();
-    for (std::size_t i = 0; i < layout.groups().size(); ++i)
-    {
-        const auto &group = layout.groups()[i];
-        const auto &primary = *primaries[i];
-        const auto &replica = *replicas[i];
-        if (primary.history_records() != replica.history_records())
-            throw std::runtime_error("Source group " + group.id +
+    for (std::size_t i = 0; i < layout_.groups().size(); ++i)
+        if (primaries_[i]->history_records() != replicas_[i]->history_records())
+            throw std::runtime_error("Source group " + layout_.groups()[i].id +
                 " is not synchronized; run primary/replica catch-up, then stop both nodes");
+}
+
+OfflineSources::~OfflineSources() = default;
+
+SourceSnapshot OfflineSources::snapshot() const
+{
+    SourceSnapshot snapshot;
+    snapshot.ownership_definition = layout_.ownership_definition();
+    for (std::size_t i = 0; i < layout_.groups().size(); ++i)
+    {
+        const auto &group = layout_.groups()[i];
+        const auto &primary = *primaries_[i];
         auto entries = primary.snapshot();
         snapshot.sources.push_back({group.id, primary.history_id(), primary.last_sequence(), entries.size()});
         snapshot.entries.insert(snapshot.entries.end(), entries.begin(), entries.end());
@@ -57,6 +63,12 @@ SourceSnapshot collect_source_snapshot(const ClusterLayout &layout)
         if (snapshot.entries[i-1].first == snapshot.entries[i].first)
             throw std::runtime_error("Duplicate key across source groups");
     return snapshot;
+}
+
+SourceSnapshot collect_source_snapshot(const ClusterLayout &layout)
+{
+    OfflineSources sources(layout);
+    return sources.snapshot();
 }
 
 void write_source_snapshot(const SourceSnapshot &snapshot, const std::string &output_path)

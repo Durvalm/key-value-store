@@ -108,8 +108,10 @@ updated binaries cooperate, but older already-running binaries or manual file
 edits do not. Stop all source processes before this command and avoid modifying
 source files externally. The source directory must allow creating/reusing locks.
 
-All locks remain held during collection, then release when the detached copy is
-returned. The command does not impose an ongoing maintenance window after capture.
+The standalone snapshot command holds locks during collection, then releases them
+when the detached copy is returned. The new [transfer command](destination-transfer.md)
+uses an `OfflineSources` lifetime guard to retain the same locks through copying.
+Neither command imposes an ongoing maintenance window after it exits.
 If source traffic resumes, the export can become stale. The later migration must
 keep traffic paused until transfer, verification and activation finish; a saved
 snapshot must not be assumed to represent subsequently changed sources.
@@ -122,8 +124,9 @@ malformed or incomplete histories still require investigation; this tool does no
 merge or repair them. A failed collection creates no output file.
 
 If output creation/writing fails, choose a fresh writable destination and retry.
-The original logs are retained. This command does not start servers, send data to
-new groups, or activate a topology.
+The original logs are retained. This snapshot command does not start servers, send data to new groups, or activate
+a topology. The separate [transfer step](destination-transfer.md) now sends the
+fresh captured values through destination primaries; verification/activation follow.
 
 ## Verification
 

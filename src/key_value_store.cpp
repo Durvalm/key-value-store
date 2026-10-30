@@ -121,11 +121,7 @@ KeyValueStore::KeyValueStore(const std::string &file_path, const ClusterLayout &
 
 std::string KeyValueStore::ownership_header() const
 {
-    if (!layout_)
-        return "";
-    std::ostringstream header;
-    header << "OWNERSHIP " << std::quoted(group_id_) << ' ' << layout_->ownership_definition();
-    return header.str();
+    return layout_ ? layout_->ownership_header(group_id_) : "";
 }
 
 void KeyValueStore::initialize(const std::string &new_history_id)

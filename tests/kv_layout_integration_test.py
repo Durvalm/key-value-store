@@ -198,6 +198,8 @@ def test_peer_layout_mismatch(server):
         assert len(Path(group['replica_log']).read_text().splitlines()[0]) > 4096
         # A rejected mismatch must not consume the replica's one peer session.
         start_node(server, correct, group, 'primary', cleanup)
+        identity = Path(group['primary_log']).read_text().splitlines()[0]
+        request(group['primary_port'], 'IMPORT wrong ' + json.dumps(identity), 'ERROR IMPORT_IDENTITY_MISMATCH')
         owner = owner_lookup(groups)
         key = next(f'probe-{i}' for i in range(10000) if owner(f'probe-{i}') == group['id'])
         request(group['primary_port'], f'SET "{key}" "works"', 'OK')

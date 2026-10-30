@@ -152,7 +152,7 @@ namespace
     void handle_client(int client_socket, KeyValueStore &store, unsigned int idle_timeout_seconds,
                        const std::string &role, int replica_socket,
                        std::mutex &replication_mutex, bool &replica_failed,
-                       bool &replica_session_used)
+                       bool &replica_session_used, bool &import_session_used)
     {
 
         timeval io_timeout{};
@@ -183,6 +183,7 @@ namespace
         std::string pending_data;
         bool client_connected = true;
         bool peer_connection = false;
+        bool import_connection = false;
         const std::string ownership = store.ownership_header();
         // A full layout (up to 64 IDs of 128 bytes) is larger than a client command.
         const std::size_t handshake_limit = ownership.empty() ? max_request_size : 16384;
@@ -310,9 +311,40 @@ namespace
                     // One order for local application, sending, and acknowledgment.
                     // Socket-only locking would still allow local/remote order to differ.
                     std::lock_guard<std::mutex> lock(replication_mutex);
-                    result = process_command(request, store, replica_failed, false);
-                    if (replica_failed && result.response.starts_with("ERROR READ_ONLY"))
-                        result.response = "ERROR REPLICA_UNAVAILABLE \"Replication failed; further writes are disabled\"\n";
+                    if (request.starts_with("IMPORT "))
+                    {
+                        std::istringstream input(request);
+                        std::string marker, history, identity, extra;
+                        bool valid = static_cast<bool>(input >> marker >> history);
+                        input >> std::ws;
+                        valid = valid && input.peek() == '"' && static_cast<bool>(input >> std::quoted(identity));
+                        if (!valid || (input >> extra) || request.size() > handshake_limit ||
+                            request.find_first_of("\r\n") != std::string::npos)
+                            result = {"ERROR INVALID_IMPORT\n", false};
+                        else if (ownership.empty() || history != store.history_id() || identity != ownership)
+                            result = {"ERROR IMPORT_IDENTITY_MISMATCH\n", false};
+                        else if (import_session_used)
+                            result = {"ERROR IMPORT_SESSION_USED\n", false};
+                        else if (replica_failed || store.last_sequence() != 0 || store.size() != 0)
+                            result = {"ERROR DESTINATION_NOT_FRESH\n", false};
+                        else
+                        {
+                            // Reserve before any mutation; other client writes remain
+                            // disabled until this destination process is restarted.
+                            import_session_used = true;
+                            import_connection = true;
+                            result = {"READY_IMPORT\n", false};
+                        }
+                    }
+                    else
+                    {
+                        result = process_command(request, store,
+                            replica_failed || (import_session_used && !import_connection), false);
+                        if (replica_failed && result.response.starts_with("ERROR READ_ONLY"))
+                            result.response = "ERROR REPLICA_UNAVAILABLE \"Replication failed; further writes are disabled\"\n";
+                        else if (import_session_used && !import_connection && result.response.starts_with("ERROR READ_ONLY"))
+                            result.response = "ERROR IMPORT_IN_PROGRESS \"Destination is reserved for import\"\n";
+                    }
 
                     if (result.mutation_applied)
                     {
@@ -358,7 +390,8 @@ namespace
 
             // A uint64 sequence plus its separating space adds at most 21 bytes.
             std::size_t frame_limit = max_request_size + (peer_connection ? 21 : 0);
-            if (role == "replica" && !peer_connection && pending_data.starts_with("REPLICA "))
+            if ((role == "replica" && !peer_connection && pending_data.starts_with("REPLICA ")) ||
+                (role == "primary" && pending_data.starts_with("IMPORT ")))
                 frame_limit = handshake_limit;
             if (client_connected && pending_data.size() > frame_limit)
             {
@@ -458,12 +491,13 @@ namespace
         std::mutex replication_mutex;
         bool replica_failed = false;
         bool replica_session_used = false;
+        bool import_session_used = false;
 
         // Workers share the queue but own one active client socket at a time.
         auto worker_task = [&pending_client_sockets, &connection_state_mutex,
                             &queue_condition, &workers_stopping,
                             &active_client_sockets, &store,
-                            &replication_mutex, &replica_failed, &replica_session_used,
+                            &replication_mutex, &replica_failed, &replica_session_used, &import_session_used,
                             &role, idle_timeout_seconds, replica_socket](std::size_t worker_index)
         {
             while (true)
@@ -485,7 +519,7 @@ namespace
                 try
                 {
                     handle_client(client_socket, store, idle_timeout_seconds, role, replica_socket,
-                                  replication_mutex, replica_failed, replica_session_used);
+                                  replication_mutex, replica_failed, replica_session_used, import_session_used);
                 }
                 catch (const std::exception &error)
                 {

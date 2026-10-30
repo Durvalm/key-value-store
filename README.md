@@ -112,7 +112,8 @@ The [shared layout guide](docs/cluster-layout.md) explains layout-driven client
 routing, server startup and saved ownership checks. It also includes the read-only
 old/new ownership preview. The [offline source snapshot](docs/source-snapshot.md)
 collects verified live data from stopped groups without modifying their logs.
-Destination transfer and activation remain next.
+The [destination transfer](docs/destination-transfer.md) copies that data into fresh
+replicated groups; exact destination verification and activation remain next.
 
 Explore selected distributed-system mechanisms such as:
 

@@ -100,6 +100,14 @@ std::string ClusterLayout::ownership_definition() const
     return definition.str();
 }
 
+std::string ClusterLayout::ownership_header(const std::string &group_id) const
+{
+    group(group_id); // Validate that this is a member of the layout.
+    std::ostringstream header;
+    header << "OWNERSHIP " << std::quoted(group_id) << ' ' << ownership_definition();
+    return header.str();
+}
+
 const GroupDefinition &ClusterLayout::group(const std::string &id) const
 {
     for (const GroupDefinition &group : groups_)
