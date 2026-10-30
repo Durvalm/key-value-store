@@ -8,6 +8,7 @@
 #include <iostream>
 #include <filesystem>
 #include <charconv>
+#include <algorithm>
 
 // Helper functions
 namespace
@@ -98,14 +99,24 @@ KeyValueStore::KeyValueStore(const std::string &file_path, bool numbered_history
     if (!new_history_id.empty() && (!numbered_history_ || !valid_history_id(new_history_id)))
         throw std::runtime_error("History ID requires numbered mode and 1-128 letters, digits, dots, underscores or hyphens");
 
+    log_lock_.emplace(file_path_);
     initialize(new_history_id);
 }
 
 KeyValueStore::KeyValueStore(const std::string &file_path, const ClusterLayout &layout,
-                           const std::string &group_id)
-    : file_path_(file_path), layout_(layout), group_id_(group_id), numbered_history_(true)
+                           const std::string &group_id, bool read_only)
+    : file_path_(file_path), layout_(layout), group_id_(group_id), numbered_history_(true), read_only_(read_only)
 {
-    initialize(layout_->group(group_id_).history_id);
+    const auto &expected_id = layout_->group(group_id_).history_id;
+    log_lock_.emplace(file_path_);
+    if (read_only_)
+    {
+        replay(false);
+        if (history_id_.empty() || history_id_ != expected_id)
+            throw std::runtime_error("Source log requires the expected saved HISTORY header");
+    }
+    else
+        initialize(expected_id);
 }
 
 std::string KeyValueStore::ownership_header() const
@@ -161,6 +172,8 @@ void KeyValueStore::set(
     const std::string &value)
 {
     validate_field(key, "Key");
+    if (read_only_)
+        throw std::runtime_error("Source snapshot store is read-only");
     require_owned_key(key);
     validate_field(value, "Value");
 
@@ -198,6 +211,8 @@ bool KeyValueStore::remove(
     const std::string &key)
 {
     validate_field(key, "Key");
+    if (read_only_)
+        throw std::runtime_error("Source snapshot store is read-only");
     require_owned_key(key);
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -236,6 +251,8 @@ void KeyValueStore::open_log()
 
 void KeyValueStore::append_record(const std::string &record)
 {
+    if (read_only_)
+        throw std::runtime_error("Source snapshot store is read-only");
     if (write_failed_)
         throw std::runtime_error("Writes disabled after persistence/application failure");
 
@@ -282,7 +299,7 @@ std::vector<std::string> KeyValueStore::history_records() const
 std::uint64_t KeyValueStore::apply_replica_record(const std::string &record)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!numbered_history_ || write_failed_)
+    if (!numbered_history_ || read_only_ || write_failed_)
         throw std::runtime_error("Numbered replica history is not writable");
     if (record.find_first_of("\r\n") != std::string::npos)
         throw std::runtime_error("Replication record must contain exactly one line");
@@ -324,6 +341,19 @@ std::uint64_t KeyValueStore::apply_replica_record(const std::string &record)
         throw;
     }
     return sequence;
+}
+
+std::vector<std::pair<std::string, std::string>> KeyValueStore::snapshot() const
+{
+    std::vector<std::pair<std::string, std::string>> entries;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (write_failed_)
+            throw std::runtime_error("Cannot snapshot a store after a write failure");
+        entries.assign(data_.begin(), data_.end());
+    }
+    std::sort(entries.begin(), entries.end());
+    return entries;
 }
 
 std::size_t
@@ -404,12 +434,14 @@ void KeyValueStore::compact()
 }
 
 // Replay method, runs at startup and sends all data in-memory
-void KeyValueStore::replay()
+void KeyValueStore::replay(bool create_missing)
 {
     std::ifstream log_file(file_path_);
 
     if (!log_file.is_open())
     {
+        if (!create_missing)
+            throw std::runtime_error("Could not read existing source log: " + file_path_);
         std::ofstream new_log_file(file_path_, std::ios::app);
         if (!new_log_file.is_open())
         {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cluster_layout.h"
+#include "log_lock.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <vector>
+#include <utility>
 
 class KeyValueStore
 {
@@ -22,8 +24,9 @@ public:
                            const std::string &new_history_id = "", int partition_id = -1);
 
     // Layout-managed nodes use numbered histories and the group's expected ID.
+    // read_only replays an existing offline source without creating/appending logs.
     KeyValueStore(const std::string &file_path, const ClusterLayout &layout,
-                  const std::string &group_id);
+                  const std::string &group_id, bool read_only = false);
     // Canonical identity shared by log headers and the peer handshake; empty in legacy mode.
     std::string ownership_header() const;
 
@@ -32,6 +35,8 @@ public:
     void set(const std::string &key, const std::string &value);
     std::optional<std::string> get(const std::string &key) const;
     bool remove(const std::string &key);
+    // Detached, sorted copy of current live state; not the mutation history.
+    std::vector<std::pair<std::string, std::string>> snapshot() const;
     std::size_t size() const;
     bool contains(const std::string &key) const;
     void compact();
@@ -45,10 +50,12 @@ public:
 private:
     void initialize(const std::string &new_history_id);
     void require_owned_key(const std::string &key) const;
-    void replay();
+    void replay(bool create_missing = true);
     void append_record(const std::string &record);
     void open_log();
     std::string file_path_;
+    // Declared before the stream: destruction closes the stream before unlocking.
+    std::optional<LogLock> log_lock_;
     std::ofstream log_file_;
     std::unordered_map<std::string, std::string> data_;
     std::optional<ClusterLayout> layout_;
@@ -58,6 +65,7 @@ private:
     bool partition_header_present_ = false;
     bool numbered_history_ = false;
     std::string history_id_;
+    bool read_only_ = false;
     bool write_failed_ = false;
     // Retain records to verify old resends without applying them again.
     std::vector<std::string> history_;

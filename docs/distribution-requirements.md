@@ -502,6 +502,14 @@ enough; resumable migration is optional. Test interruption before publication,
 restart of the new deployment, moved/unmoved keys, overwritten values, and deleted
 keys. Adding a group to a configuration list alone is not a rebalance.
 
+### Source collection implemented
+
+The [offline source snapshot](source-snapshot.md) now enforces existing-source,
+layout/history, synchronization and per-primary live-state checks. It holds
+process locks during collection, preserves the original logs, and exports a
+sorted logical dataset. Destination transfer, exact destination verification,
+interruption handling and verified topology activation remain separate work.
+
 ## Advanced tracks: choose a concrete question first
 
 ### Online membership and migration

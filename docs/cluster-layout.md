@@ -194,11 +194,14 @@ and a coordinated switch remain necessary before clients use a new ownership map
 
 ## What is still next
 
-The migration tool must read one recovered primary snapshot per old group,
-transfer live values into fresh replicated destination groups, verify exact data,
-and publish the new deployment only after success. Traffic must stay paused and
-original logs intact throughout that offline operation. Source/destination
-cross-checks, interruption handling and activation are not implemented here.
+The [offline source snapshot](source-snapshot.md) now reads and validates stopped
+source groups, compares complete primary/replica histories, and exports current
+values once per primary while retaining the source logs. File-backed stores hold
+lifetime process locks so snapshot collection refuses running nodes.
+
+Transfer into fresh destination groups, exact destination verification and safe
+activation remain next. Traffic must stay paused and original logs intact
+throughout that offline operation. A snapshot alone is not a completed migration.
 
 ## Verification
 
