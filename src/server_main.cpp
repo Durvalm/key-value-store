@@ -290,7 +290,7 @@ namespace
                 }
 
                 CommandResult result;
-                if (!peer_connection && request.starts_with("VERIFY "))
+                if (!peer_connection && (request.starts_with("VERIFY ") || request.starts_with("VERIFY_ACTIVATE ")))
                 {
                     // Read-only identity/progress check for the offline verifier.
                     std::istringstream input(request);
@@ -307,7 +307,18 @@ namespace
                              expected_ownership != ownership || expected_node != store.node_description(role))
                         result = {"ERROR VERIFY_IDENTITY_MISMATCH\n", false};
                     else
-                        result = {"VERIFY_READY " + std::to_string(store.last_sequence()) + '\n', false};
+                    {
+                        // Activation must not publish primaries still reserved for
+                        // import or unable to replicate new client writes.
+                        std::unique_lock<std::mutex> lock(replication_mutex, std::defer_lock);
+                        if (role == "primary" && marker == "VERIFY_ACTIVATE")
+                            lock.lock();
+                        if (role == "primary" && marker == "VERIFY_ACTIVATE" &&
+                            (import_session_used || replica_failed))
+                            result = {"ERROR ACTIVATION_NOT_READY\n", false};
+                        else
+                            result = {"VERIFY_READY " + std::to_string(store.last_sequence()) + '\n', false};
+                    }
                 }
                 else if (peer_connection)
                 {
@@ -413,7 +424,8 @@ namespace
                 (role == "primary" && pending_data.starts_with("IMPORT ")))
                 frame_limit = handshake_limit;
             // VERIFY also carries this node's quoted canonical log path.
-            if (!peer_connection && !ownership.empty() && pending_data.starts_with("VERIFY "))
+            if (!peer_connection && !ownership.empty() &&
+                (pending_data.starts_with("VERIFY ") || pending_data.starts_with("VERIFY_ACTIVATE ")))
                 frame_limit = 32768;
             if (client_connected && pending_data.size() > frame_limit)
             {

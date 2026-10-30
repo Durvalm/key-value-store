@@ -192,7 +192,7 @@ Configuration is loaded once per process. Editing a file is not a membership
 change protocol, and it does not reconfigure running servers. Offline migration
 and a coordinated switch remain necessary before clients use a new ownership map.
 
-## What is still next
+## Offline migration and activation
 
 The [offline source snapshot](source-snapshot.md) now reads and validates stopped
 source groups, compares complete primary/replica histories, and exports current
@@ -202,8 +202,9 @@ lifetime process locks so snapshot collection refuses running nodes.
 The [destination transfer](destination-transfer.md) now sends fresh captured values
 to reserved, empty replicated destination groups while retaining source locks.
 [Exact destination verification](destination-verification.md) checks both copies.
-Safe activation remains next. Traffic must stay
-paused and original logs intact throughout that offline operation. Copying alone
+[Controlled activation](layout-activation.md) repeats verification and publishes a
+complete active layout. Restart every client using that file before resuming traffic.
+Traffic must stay paused and original logs intact throughout that offline operation. Copying alone
 is not a completed migration.
 
 ## Verification

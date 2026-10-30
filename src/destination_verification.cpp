@@ -27,11 +27,12 @@ namespace
         return layout.groups()[node.group].id + (node.replica ? "/replica" : "/primary");
     }
 
-    std::uint64_t check_identity(const ClusterLayout &layout, const VerificationNode &node)
+    std::uint64_t check_identity(const ClusterLayout &layout, const VerificationNode &node, bool for_activation)
     {
         const auto &group = layout.groups()[node.group];
         std::ostringstream request;
-        request << "VERIFY " << group.history_id << ' ' << std::quoted(layout.ownership_header(group.id))
+        request << (for_activation ? "VERIFY_ACTIVATE " : "VERIFY ") << group.history_id
+                << ' ' << std::quoted(layout.ownership_header(group.id))
                 << ' ' << std::quoted(layout.node_description(group.id, node.replica ? "replica" : "primary")) << '\n';
         if (request.str().size() > 32768)
             throw std::runtime_error("Verification identity exceeds protocol limit");
@@ -48,7 +49,8 @@ namespace
     }
 }
 
-std::vector<std::size_t> verify_destination(const SourceSnapshot &snapshot, const ClusterLayout &destination)
+std::vector<std::size_t> verify_destination(const SourceSnapshot &snapshot, const ClusterLayout &destination,
+                                            bool for_activation)
 {
     const auto &groups = destination.groups();
     // Each bucket contains GET request / expected VALUE response pairs.
@@ -88,7 +90,7 @@ std::vector<std::size_t> verify_destination(const SourceSnapshot &snapshot, cons
         // Capture all starting counters before reading any data. Finish counters
         // are captured only after all data checks, so the checked windows overlap.
         for (auto &node : nodes)
-            node.sequence = check_identity(destination, node);
+            node.sequence = check_identity(destination, node, for_activation);
         for (std::size_t i = 0; i < nodes.size(); i += 2)
             if (nodes[i].sequence != nodes[i+1].sequence)
                 throw std::runtime_error("Primary/replica progress differs for " + groups[nodes[i].group].id);
@@ -102,7 +104,7 @@ std::vector<std::size_t> verify_destination(const SourceSnapshot &snapshot, cons
                 throw std::runtime_error("Key count mismatch on " + label(destination, node));
         }
         for (const auto &node : nodes)
-            if (check_identity(destination, node) != node.sequence)
+            if (check_identity(destination, node, for_activation) != node.sequence)
                 throw std::runtime_error("Destination changed during verification: " + label(destination, node));
     }
     catch (...)

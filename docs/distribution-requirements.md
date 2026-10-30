@@ -470,7 +470,9 @@ The [shared layout integration](cluster-layout.md) now provides versioned old/ne
 definitions, client routing, node startup, saved ownership validation and peer
 layout agreement. The owner preview remains read-only. The destination transfer
 step now copies the data, and [exact verification](destination-verification.md)
-checks both copies against the source. Controlled activation remains to be implemented. Editing a layout alone does not move data.
+checks both copies against the source. [Controlled activation](layout-activation.md)
+now reverifies and atomically publishes a complete active layout. Clients must be
+stopped and restarted with that file as part of the offline operator procedure. Editing a layout alone does not move data.
 
 Begin with a stopped/quiesced deployment and a fixed old mapping and new mapping.
 No client traffic is admitted during migration; this deliberately avoids concurrent
@@ -512,8 +514,12 @@ sorted logical dataset. [Destination transfer](destination-transfer.md) now reta
 copying, checks fresh separate histories/files, and writes through reserved primary
 connections with replica acknowledgments. The separate `kv_verify` command checks
 node identity, exact values and per-node counts on both copies, with stable sequence
-checks around the reads. Verified activation remains separate work; partial-copy
-failure and verification rejection are covered by tests.
+checks around the reads. `kv_activate` repeats verification, checks normal-write
+readiness after destination restart, and atomically publishes a separate active layout
+while retaining source locks. Tests cover partial-copy failure, verification rejection,
+interruption before publication, retry, and client reads/replicated writes after cutover.
+Traffic pause and restarting all clients remain explicit operator responsibilities;
+there is no automatic fencing or online migration.
 
 ## Advanced tracks: choose a concrete question first
 

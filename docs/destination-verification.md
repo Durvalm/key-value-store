@@ -72,7 +72,7 @@ values, missing/extra keys, identity mistakes and unchanged log bytes/timestamps
 Deterministic protocol peers additionally test replica-only discrepancies, unequal
 progress, malformed counters and a sequence change during verification.
 
-## Limits and next step
+## Limits and activation
 
 This is an offline operator check. Source locks cover the command's lifetime;
 sequence checks detect accepted destination mutations during the checked interval.
@@ -80,9 +80,11 @@ They do not prevent writes after the command finishes. Keep traffic paused throu
 activation, and do not restart or edit sources between transfer and verification.
 
 Verification does not change layout files, release import reservations, save an
-activation marker or publish a topology. The remaining step is controlled activation:
-record the verified destination layout, move all clients to it together while traffic
-is still paused, and only then resume traffic. Preserve the old logs until acceptance.
+activation marker or publish a topology. The separate
+[activation command](layout-activation.md) now repeats these checks and atomically
+publishes the destination layout, after candidate restart clears import reservations.
+Restart all clients with the active layout while traffic is paused, then resume it.
+Preserve the old logs until acceptance.
 
 The dataset remains in memory and requests run sequentially. Authentication, online
 migration and resumable verification are deferred. Normal log flushing still does

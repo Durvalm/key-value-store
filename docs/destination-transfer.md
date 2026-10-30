@@ -104,7 +104,9 @@ The tool refuses to append a repeated transfer to a nonfresh history.
 Do not start normal clients on the candidate layout after copying. Keep the
 maintenance window in place for exact destination verification and controlled
 activation. Source locks protect cooperating binaries during the command, not
-indefinitely after it returns. Candidate process restart alone is not a verified
+indefinitely after it returns. The [activation guide](layout-activation.md) covers
+candidate restart, fresh verification and atomic active-layout publication.
+Candidate process restart alone is not a verified
 migration or a safe publication step.
 
 ## Important code
@@ -121,7 +123,8 @@ migration or a safe publication step.
 
 This is a local-filesystem, loopback, whole-dataset-in-memory learning milestone.
 The importer is sequential, not a throughput benchmark. Actual snapshot-file
-import, resumable copies, online migration and automatic activation are not added.
+import, resumable copies and online migration are not added. The separate
+`kv_activate` command provides explicit offline publication, not automatic cutover.
 
 ## Verification
 

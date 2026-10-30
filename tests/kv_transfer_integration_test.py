@@ -35,7 +35,7 @@ def seed_source(server, client, layout, groups, cleanup):
     return values
 
 
-def test_transfer(server, client, transfer, verify, source_ring):
+def test_transfer(server, client, transfer, verify, activate, source_ring):
     with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
         directory = Path(directory)
         old_dir, new_dir = directory/'old', directory/'new'
@@ -126,6 +126,13 @@ def test_transfer(server, client, transfer, verify, source_ring):
         assert checked.returncode == 0, checked.stderr
         assert f'Verified {len(values)} live keys' in checked.stdout
 
+        active = directory/'active.layout'
+        active.write_bytes(source_layout.read_bytes())
+        rejected = subprocess.run([str(activate), str(source_layout), str(target_layout), str(active)],
+                                  text=True, capture_output=True, timeout=20)
+        assert rejected.returncode != 0 and 'ACTIVATION_NOT_READY' in rejected.stderr, rejected.stderr
+        assert active.read_bytes() == source_layout.read_bytes()
+
         saved_targets = {Path(group[f'{role}_log']): Path(group[f'{role}_log']).read_bytes()
                          for group in targets for role in ['primary','replica']}
         retry = subprocess.run([str(transfer), str(source_layout), str(target_layout)],
@@ -146,6 +153,19 @@ def test_transfer(server, client, transfer, verify, source_ring):
                                  text=True, capture_output=True, timeout=20)
         assert checked.returncode == 0, checked.stderr
         assert all(path.read_bytes() == content for path, content in saved_targets.items())
+        activated = subprocess.run([str(activate), str(source_layout), str(target_layout), str(active)],
+                                   text=True, capture_output=True, timeout=20)
+        assert activated.returncode == 0 and 'published active layout' in activated.stdout, activated.stderr
+        # Clients load the published file, then ordinary replicated writes work.
+        result = subprocess.run([str(client), '--layout', str(active)],
+            input='GET "color"\nGET "deleted"\nSET "after-activation" "works"\nEXIT\n',
+            text=True, capture_output=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == ['VALUE "latest"', 'NOT_FOUND', 'OK', 'BYE'], result.stdout
+        owner_group = next(group for group in targets if group['id'] == owner('after-activation'))
+        request(owner_group['replica_port'], 'GET "after-activation"', 'VALUE "works"')
+        for path, (contents, timestamp) in original.items():
+            assert path.read_bytes() == contents and path.stat().st_mtime_ns == timestamp
         assert [source_layout.read_bytes(), target_layout.read_bytes()] == saved_configs
 
 
@@ -224,8 +244,8 @@ def test_partial_failure(server, client, transfer, snapshot):
 
 
 if __name__ == '__main__':
-    server, client, transfer, snapshot, verify = map(Path, sys.argv[1:])
-    test_transfer(server, client, transfer, verify, source_ring=False)
-    test_transfer(server, client, transfer, verify, source_ring=True)
+    server, client, transfer, snapshot, verify, activate = map(Path, sys.argv[1:])
+    test_transfer(server, client, transfer, verify, activate, source_ring=False)
+    test_transfer(server, client, transfer, verify, activate, source_ring=True)
     test_partial_failure(server, client, transfer, snapshot)
     print('Destination transfer, source preservation and uncertainty checks passed.')

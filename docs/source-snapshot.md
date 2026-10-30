@@ -128,7 +128,8 @@ The original logs are retained. This snapshot command does not start servers, se
 a topology. The separate [transfer step](destination-transfer.md) now sends the
 fresh captured values through destination primaries. The separate
 [verification command](destination-verification.md) recaptures and locks the sources
-while comparing both destination copies. Controlled activation remains next.
+while comparing both destination copies. [Controlled activation](layout-activation.md)
+retains source locks through fresh verification and active-layout publication.
 
 ## Verification
 
