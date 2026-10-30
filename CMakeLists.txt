@@ -18,6 +18,7 @@ add_library(kv_store
     src/line_connection.cpp
     src/source_snapshot.cpp
     src/destination_transfer.cpp
+    src/destination_verification.cpp
     src/command_processor.cpp
     src/command_parser.cpp
     src/partition.cpp
@@ -48,6 +49,9 @@ add_executable(kv_client
 add_executable(kv_benchmark
     src/benchmark_main.cpp
 )
+
+add_executable(kv_verify src/verify_main.cpp)
+target_link_libraries(kv_verify PRIVATE kv_store)
 
 add_executable(kv_transfer src/transfer_main.cpp)
 target_link_libraries(kv_transfer PRIVATE kv_store)
@@ -142,8 +146,14 @@ if(BUILD_TESTING)
     add_test(NAME kv_transfer_integration_tests
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/kv_transfer_integration_test.py
-            $<TARGET_FILE:kv_server> $<TARGET_FILE:kv_client> $<TARGET_FILE:kv_transfer> $<TARGET_FILE:kv_snapshot>)
+            $<TARGET_FILE:kv_server> $<TARGET_FILE:kv_client> $<TARGET_FILE:kv_transfer> $<TARGET_FILE:kv_snapshot> $<TARGET_FILE:kv_verify>)
     set_tests_properties(kv_transfer_integration_tests PROPERTIES TIMEOUT 40)
+
+    add_test(NAME kv_verification_tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/kv_verification_test.py
+            $<TARGET_FILE:kv_server> $<TARGET_FILE:kv_verify>)
+    set_tests_properties(kv_verification_tests PROPERTIES TIMEOUT 40)
 
     add_test(NAME kv_snapshot_integration_tests
         COMMAND ${Python3_EXECUTABLE}
@@ -202,6 +212,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(kv_layout PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(kv_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(kv_transfer PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(kv_verify PRIVATE -Wall -Wextra -Wpedantic)
 
     if(BUILD_TESTING)
         target_compile_options(kv_store_tests PRIVATE

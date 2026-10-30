@@ -108,6 +108,17 @@ std::string ClusterLayout::ownership_header(const std::string &group_id) const
     return header.str();
 }
 
+std::string ClusterLayout::node_description(const std::string &group_id, const std::string &role) const
+{
+    if (role != "primary" && role != "replica")
+        throw std::runtime_error("Node description requires primary or replica role");
+    const auto &definition = group(group_id);
+    std::ostringstream description;
+    description << role << ' ' << definition.primary_port << ' ' << definition.replica_port
+                << ' ' << std::quoted(role == "primary" ? definition.primary_log : definition.replica_log);
+    return description.str();
+}
+
 const GroupDefinition &ClusterLayout::group(const std::string &id) const
 {
     for (const GroupDefinition &group : groups_)

@@ -113,7 +113,8 @@ routing, server startup and saved ownership checks. It also includes the read-on
 old/new ownership preview. The [offline source snapshot](docs/source-snapshot.md)
 collects verified live data from stopped groups without modifying their logs.
 The [destination transfer](docs/destination-transfer.md) copies that data into fresh
-replicated groups; exact destination verification and activation remain next.
+replicated groups. [Exact destination verification](docs/destination-verification.md)
+checks both copies against the source; controlled activation remains next.
 
 Explore selected distributed-system mechanisms such as:
 

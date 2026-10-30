@@ -290,7 +290,26 @@ namespace
                 }
 
                 CommandResult result;
-                if (peer_connection)
+                if (!peer_connection && request.starts_with("VERIFY "))
+                {
+                    // Read-only identity/progress check for the offline verifier.
+                    std::istringstream input(request);
+                    std::string marker, history, expected_ownership, expected_node, extra;
+                    bool valid = static_cast<bool>(input >> marker >> history);
+                    input >> std::ws;
+                    valid = valid && input.peek() == '"' && static_cast<bool>(input >> std::quoted(expected_ownership));
+                    input >> std::ws;
+                    valid = valid && input.peek() == '"' && static_cast<bool>(input >> std::quoted(expected_node));
+                    if (!valid || (input >> extra) || request.size() > 32768 ||
+                        request.find_first_of("\r\n") != std::string::npos)
+                        result = {"ERROR INVALID_VERIFY\n", false};
+                    else if (ownership.empty() || history != store.history_id() ||
+                             expected_ownership != ownership || expected_node != store.node_description(role))
+                        result = {"ERROR VERIFY_IDENTITY_MISMATCH\n", false};
+                    else
+                        result = {"VERIFY_READY " + std::to_string(store.last_sequence()) + '\n', false};
+                }
+                else if (peer_connection)
                 {
                     try
                     {
@@ -393,6 +412,9 @@ namespace
             if ((role == "replica" && !peer_connection && pending_data.starts_with("REPLICA ")) ||
                 (role == "primary" && pending_data.starts_with("IMPORT ")))
                 frame_limit = handshake_limit;
+            // VERIFY also carries this node's quoted canonical log path.
+            if (!peer_connection && !ownership.empty() && pending_data.starts_with("VERIFY "))
+                frame_limit = 32768;
             if (client_connected && pending_data.size() > frame_limit)
             {
                 send_all(client_socket, request_too_large_result().response);

@@ -124,6 +124,11 @@ std::string KeyValueStore::ownership_header() const
     return layout_ ? layout_->ownership_header(group_id_) : "";
 }
 
+std::string KeyValueStore::node_description(const std::string &role) const
+{
+    return layout_ ? layout_->node_description(group_id_, role) : "";
+}
+
 void KeyValueStore::initialize(const std::string &new_history_id)
 {
     replay();

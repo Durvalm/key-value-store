@@ -31,6 +31,7 @@ public:
     // Canonical ownership settings only; endpoints/log locations may change.
     std::string ownership_definition() const;
     std::string ownership_header(const std::string &group_id) const;
+    std::string node_description(const std::string &group_id, const std::string &role) const;
     const GroupDefinition &owner(const std::string &key) const;
     const GroupDefinition &group(const std::string &id) const;
 

@@ -469,8 +469,8 @@ layout mode now connects this ring to live routing as described in Step 8.
 The [shared layout integration](cluster-layout.md) now provides versioned old/new
 definitions, client routing, node startup, saved ownership validation and peer
 layout agreement. The owner preview remains read-only. The destination transfer
-step now copies the data; exact verification and activation remain to be
-implemented. Editing a layout alone does not move data.
+step now copies the data, and [exact verification](destination-verification.md)
+checks both copies against the source. Controlled activation remains to be implemented. Editing a layout alone does not move data.
 
 Begin with a stopped/quiesced deployment and a fixed old mapping and new mapping.
 No client traffic is admitted during migration; this deliberately avoids concurrent
@@ -510,8 +510,10 @@ layout/history, synchronization and per-primary live-state checks. It holds
 process locks during collection, preserves the original logs, and exports a
 sorted logical dataset. [Destination transfer](destination-transfer.md) now retains those locks through
 copying, checks fresh separate histories/files, and writes through reserved primary
-connections with replica acknowledgments. Exact destination verification and
-verified activation remain separate work; partial-copy failure is covered by tests.
+connections with replica acknowledgments. The separate `kv_verify` command checks
+node identity, exact values and per-node counts on both copies, with stable sequence
+checks around the reads. Verified activation remains separate work; partial-copy
+failure and verification rejection are covered by tests.
 
 ## Advanced tracks: choose a concrete question first
 

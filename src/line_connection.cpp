@@ -12,7 +12,7 @@
 #include <stdexcept>
 
 // One request is outstanding at a time. The caller serializes each exchange.
-std::string exchange_message(int socket, const std::string &request)
+std::string exchange_message(int socket, const std::string &request, std::size_t response_limit)
 {
     std::size_t sent = 0;
     while (sent < request.size())
@@ -43,8 +43,8 @@ std::string exchange_message(int socket, const std::string &request)
         if (count == 0)
             throw std::runtime_error("Peer disconnected before acknowledgment");
         response.append(buffer, static_cast<std::size_t>(count));
-        if (response.size() > 512)
-            throw std::runtime_error("Acknowledgment exceeds limit");
+        if (response.size() > response_limit)
+            throw std::runtime_error("Response exceeds limit");
     }
     if (response.find('\n') != response.size() - 1 || response.find('\r') != std::string::npos)
         throw std::runtime_error("Expected exactly one response line");

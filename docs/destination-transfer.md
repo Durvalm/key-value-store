@@ -9,6 +9,7 @@ It does not publish an active layout or declare the destination fully verified.
 ```sh
 cmake --build build-release
 ./build-release/kv_transfer /path/to/source.layout /path/to/destination.layout
+./build-release/kv_verify /path/to/source.layout /path/to/destination.layout
 ```
 
 Before running:
@@ -137,4 +138,5 @@ A timed proxy stops a real replica after the first acknowledged SET: the second
 write reports uncertainty, no retry/later write occurs, sources stay unchanged,
 and their locks release on failure. The proxy also confirms sources remain locked
 after capture while copying is in progress. These are automated correctness checks;
-independent verification for an operator's particular transfer is still next.
+the separate [verification command](destination-verification.md) now performs
+independent exact checks for an operator's particular transfer.

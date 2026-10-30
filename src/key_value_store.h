@@ -29,6 +29,7 @@ public:
                   const std::string &group_id, bool read_only = false);
     // Canonical identity shared by log headers and the peer handshake; empty in legacy mode.
     std::string ownership_header() const;
+    std::string node_description(const std::string &role) const;
 
     // Partition identity is fixed at construction; -1 means unpartitioned.
     bool owns_key(const std::string &key) const;

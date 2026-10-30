@@ -126,7 +126,9 @@ merge or repair them. A failed collection creates no output file.
 If output creation/writing fails, choose a fresh writable destination and retry.
 The original logs are retained. This snapshot command does not start servers, send data to new groups, or activate
 a topology. The separate [transfer step](destination-transfer.md) now sends the
-fresh captured values through destination primaries; verification/activation follow.
+fresh captured values through destination primaries. The separate
+[verification command](destination-verification.md) recaptures and locks the sources
+while comparing both destination copies. Controlled activation remains next.
 
 ## Verification
 

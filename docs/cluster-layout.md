@@ -201,7 +201,8 @@ lifetime process locks so snapshot collection refuses running nodes.
 
 The [destination transfer](destination-transfer.md) now sends fresh captured values
 to reserved, empty replicated destination groups while retaining source locks.
-Exact destination verification and safe activation remain next. Traffic must stay
+[Exact destination verification](destination-verification.md) checks both copies.
+Safe activation remains next. Traffic must stay
 paused and original logs intact throughout that offline operation. Copying alone
 is not a completed migration.
 
